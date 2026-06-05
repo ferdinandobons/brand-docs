@@ -291,6 +291,7 @@ def inventory_regions(wb) -> list[dict]:
             {
                 "id": f"region.sheet.{slugify(sheet).replace('-', '')}",
                 "kind": "sheet",
+                "name": sheet,
                 "sheet": sheet,
                 "max_row": ws.max_row,
                 "max_column": ws.max_column,

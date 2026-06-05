@@ -512,9 +512,11 @@ def _set_placeholder_text(ph, text: str) -> None:
         paras[0].runs[0].text = text
         for extra in paras[0].runs[1:]:
             extra.text = ""
-        for p in paras[1:]:
-            for r in p.runs:
-                r.text = ""
+        # Remove surplus paragraphs entirely (not just empty their runs) so a longer
+        # previous body (e.g. a section list being refreshed to fewer headings) leaves
+        # no trailing empty paragraph behind.
+        for p in list(paras[1:]):
+            p._p.getparent().remove(p._p)
     else:
         tf.text = text
 
