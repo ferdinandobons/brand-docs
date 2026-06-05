@@ -13,9 +13,9 @@ landscape ``w:sectPr``).
 Components authored (each is a real OOXML structure, not a text approximation):
 
   COVER (multi-slot front matter, all in the cover region before the TOC):
-    * a block-level ``w:sdt`` TITLE content control with ``w:alias='Title'`` and
-      a placeholder prompt - the shape ``cover.discover_cover`` keys on as an SDT
-      anchor (python-docx cannot author this, so it is lxml);
+    * a block-level ``w:sdt`` TITLE content control with ``w:alias='Title'`` and a
+      realistic synthetic title - the shape ``cover.discover_cover`` keys on as an
+      SDT anchor (python-docx cannot author this, so it is lxml);
     * a SUBTITLE / description placeholder paragraph;
     * a DOCUMENT-ID placeholder paragraph ("Document ID: {{doc_id}}");
     * a DATE placeholder paragraph ("{{date}}").
@@ -37,12 +37,13 @@ Components authored (each is a real OOXML structure, not a text approximation):
     row banding via ``w:tblStylePr`` conditional formatting) applied to a sample
     table, with a real ``SEQ Table`` caption ("Table 1. ...").
 
-  FIGURE: an inline PNG logo (synthetic, generated in-process) with a real
-    ``SEQ Figure`` caption ("Figure 1. ...").
+  FIGURE: two real inline PNG figures, each with a ``SEQ Figure`` caption -
+    Figure 1 is the shared square brand mark (the hero.svg glyph, image1.png) and
+    Figure 2 is a real rising growth curve (image2.png, a distinct media part).
 
   CALLOUT: a paragraph style "DocuSkills Callout" with shading + a box border.
 
-  HEADER / FOOTER: a synthetic DocuSkills logo image in the default header, and a
+  HEADER / FOOTER: the shared DocuSkills brand mark in the default header, and a
     ``PAGE`` field in the default footer.
 
   SECTIONS: a PORTRAIT first section and a LANDSCAPE second section (distinct
@@ -61,8 +62,6 @@ Run:
 """
 from __future__ import annotations
 
-import struct
-import zlib
 from pathlib import Path
 
 from docx import Document
@@ -71,7 +70,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Twips
 from lxml import etree
 
-from _brandlib import freeze_ooxml, rgba
+from _brandlib import docuskills_curve_png, docuskills_mark_png, freeze_ooxml
 
 OUT = Path(__file__).resolve().parents[1] / "templates" / "docuskills_template.docx"
 
@@ -158,42 +157,13 @@ def _p(doc, text: str = "", style_id: str | None = None):
 
 
 # ---------------------------------------------------------------------------
-# A tiny synthetic PNG logo generated in-process (no external asset on disk).
-# ---------------------------------------------------------------------------
-def _synthetic_logo_png() -> bytes:
-    """Return a deterministic 96x32 RGBA PNG: a DocuSkills navy field with an
-    amber stripe (colours derived from the brand palette constants)."""
-    w, h = 96, 32
-    navy = rgba(DOCU_NAVY)
-    amber = rgba(DOCU_AMBER)
-    raw = bytearray()
-    for y in range(h):
-        raw.append(0)  # PNG filter type 0 (None) per scanline
-        for x in range(w):
-            px = amber if (12 <= y < 20 and 6 <= x < 90) else navy
-            raw.extend(px)
-
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)  # 8-bit RGBA
-    idat = zlib.compress(bytes(raw), 9)
-    return sig + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
-
-
-# ---------------------------------------------------------------------------
 # Custom STYLES (paragraph styles + the branded table style). Authored straight
 # into ``word/styles.xml`` via lxml so we control header shading / banding /
 # borders python-docx cannot express.
 # ---------------------------------------------------------------------------
 def _add_paragraph_style(styles, style_id, name, *, based_on="Normal", color=None,
-                         bold=False, size_pt=None, shading=None, box_border=None):
+                         bold=False, size_pt=None, shading=None, box_border=None,
+                         left_accent=None):
     st = _sub(styles, "style", type="paragraph", styleId=style_id)
     st.set(_w("customStyle"), "1")
     _sub(st, "name", val=name)
@@ -205,7 +175,13 @@ def _add_paragraph_style(styles, style_id, name, *, based_on="Normal", color=Non
     if box_border:
         pbdr = _sub(pPr, "pBdr")
         for side in ("top", "left", "bottom", "right"):
-            _sub(pbdr, side, val="single", sz="12", space="6", color=box_border)
+            sz = "12"
+            col = box_border
+            # BP-CALLOUT-ACCENT: thick amber accent bar on the left edge.
+            if side == "left" and left_accent:
+                sz = "24"
+                col = left_accent
+            _sub(pbdr, side, val="single", sz=sz, space="6", color=col)
         _sub(pPr, "spacing", before="120", after="120")
     rPr = _sub(st, "rPr")
     if bold:
@@ -217,8 +193,15 @@ def _add_paragraph_style(styles, style_id, name, *, based_on="Normal", color=Non
     return st
 
 
-def _add_list_style(styles, style_id, name, num_id):
-    """A list paragraph style that references a w:num via w:numPr."""
+def _add_list_style(styles, style_id, name, num_id, ilvl=0):
+    """A list paragraph style that references a w:num via w:numPr.
+
+    ``ilvl`` pins the list level on the style's ``w:numPr`` (``w:ilvl`` before
+    ``w:numId``, OOXML order). A second-level bullet style MUST declare
+    ``w:ilvl=1`` so ``structure.style_num_binding`` reads level 1 and the role
+    resolves to ``list.bullet.2`` (1-based = ilvl+1) instead of colliding with
+    the level-1 bullet role on a missing-ilvl default of 0.
+    """
     st = _sub(styles, "style", type="paragraph", styleId=style_id)
     st.set(_w("customStyle"), "1")
     _sub(st, "name", val=name)
@@ -226,6 +209,7 @@ def _add_list_style(styles, style_id, name, num_id):
     _sub(st, "qFormat")
     pPr = _sub(st, "pPr")
     numPr = _sub(pPr, "numPr")
+    _sub(numPr, "ilvl", val=str(ilvl))
     _sub(numPr, "numId", val=str(num_id))
     return st
 
@@ -326,11 +310,14 @@ def _build_styles(doc):
     _add_paragraph_style(styles, "DocuSkillsCoverSubtitle", "DocuSkills Cover Subtitle",
                          color=DOCU_TEAL, size_pt=14)
     _add_paragraph_style(styles, "DocuSkillsCallout", "DocuSkills Callout",
-                         color=DOCU_NAVY, shading=DOCU_LIGHT, box_border=DOCU_TEAL)
+                         color=DOCU_NAVY, shading=DOCU_LIGHT, box_border=DOCU_TEAL,
+                         left_accent=DOCU_AMBER)
     # List styles -> reference w:num 1 (bullet L1), 2 (bullet L2), 3 (number L1).
-    _add_list_style(styles, "DocuSkillsBulletL1", "DocuSkills Bullet L1", num_id=1)
-    _add_list_style(styles, "DocuSkillsBulletL2", "DocuSkills Bullet L2", num_id=2)
-    _add_list_style(styles, "DocuSkillsNumberL1", "DocuSkills Number L1", num_id=3)
+    # BUG-LIST-ILVL: the L2 bullet pins w:ilvl=1 so it binds to level 1 of
+    # abstractNum 0 (a distinct ``list.bullet.2`` role, not a dedup of L1).
+    _add_list_style(styles, "DocuSkillsBulletL1", "DocuSkills Bullet L1", num_id=1, ilvl=0)
+    _add_list_style(styles, "DocuSkillsBulletL2", "DocuSkills Bullet L2", num_id=2, ilvl=1)
+    _add_list_style(styles, "DocuSkillsNumberL1", "DocuSkills Number L1", num_id=3, ilvl=0)
     # Branded table style.
     _add_table_style(styles)
 
@@ -354,24 +341,38 @@ def _populate_numbering(root) -> None:
     def abstract(aid, levels):
         an = _sub(root, "abstractNum", abstractNumId=str(aid))
         _sub(an, "multiLevelType", val="hybridMultilevel")
-        for lvl, (fmt, text, indent) in enumerate(levels):
+        for lvl, level in enumerate(levels):
+            fmt, text, indent = level[0], level[1], level[2]
+            font = level[3] if len(level) > 3 else None
             l = _sub(an, "lvl", ilvl=str(lvl))
             _sub(l, "start", val="1")
             _sub(l, "numFmt", val=fmt)
+            # BUG-LIST-BULLETGLYPH: an EXPLICIT, real Unicode lvlText glyph on a
+            # plain text font. The old defs used Symbol-font private-use codepoints
+            # (U+F0B7 / U+F0A7) which Word maps to a bullet/section mark but
+            # LibreOffice renders as a stray club/box (no glyph at those PUA
+            # points without the Symbol font). Plain Unicode bullets on a standard
+            # font render identically in Word and LibreOffice.
             _sub(l, "lvlText", val=text)
             _sub(l, "lvlJc", val="left")
             pPr = _sub(l, "pPr")
             _sub(pPr, "ind", left=str(indent), hanging="360")
-            if fmt == "bullet":
+            if fmt == "bullet" and font:
                 rPr = _sub(l, "rPr")
                 rfonts = _sub(rPr, "rFonts")
-                rfonts.set(_w("ascii"), "Symbol")
-                rfonts.set(_w("hAnsi"), "Symbol")
+                rfonts.set(_w("ascii"), font)
+                rfonts.set(_w("hAnsi"), font)
+                rfonts.set(_w("cs"), font)
                 rfonts.set(_w("hint"), "default")
         return an
 
-    # abstractNum 0: two-level bullet (filled then hollow square).
-    abstract(0, [("bullet", "", 720), ("bullet", "", 1440)])
+    # abstractNum 0: two-level bullet. L1 = filled round bullet (U+2022), L2 =
+    # en-dash (U+2013), both on Arial so the glyphs are readable in Word AND
+    # LibreOffice (no Symbol-font club/box).
+    abstract(0, [
+        ("bullet", "•", 720, "Arial"),
+        ("bullet", "–", 1440, "Arial"),
+    ])
     # abstractNum 1: decimal numbered list.
     abstract(1, [("decimal", "%1.", 720)])
 
@@ -436,7 +437,16 @@ def _attach_part(doc, partname, content_type, xml_bytes, rel_type):
 # ---------------------------------------------------------------------------
 def _cover_title_sdt():
     """A block-level ``w:sdt`` cover-title content control (lxml; python-docx
-    cannot author block-level SDTs)."""
+    cannot author block-level SDTs).
+
+    CR-COVER-TITLE: the SDT keeps ``w:alias='Title'`` (the strong cover-title
+    anchor evidence ``cover._sdt_is_title`` keys on) but carries a REALISTIC
+    synthetic title instead of the "Insert title here" prompt - the bare prompt
+    read like an unfinished draft. The ``w:showingPlcHdr`` flag is dropped so Word
+    treats the text as real content, not a greyed placeholder. Cover-anchor count
+    is unaffected: ``discover_cover`` keys the SDT anchor on the container, not on
+    the text, and the alias still classifies it as the title slot.
+    """
     sdt = _el("sdt")
     sdtPr = _sub(sdt, "sdtPr")
     rpr = _sub(sdtPr, "rPr")
@@ -446,7 +456,6 @@ def _cover_title_sdt():
     _sub(sdtPr, "alias", val="Title")
     _sub(sdtPr, "tag", val="docuskills_title")
     _sub(sdtPr, "id", val="101")
-    _sub(sdtPr, "showingPlcHdr")
     placeholder = _sub(sdtPr, "placeholder")
     _sub(placeholder, "docPart", val="DefaultPlaceholder_Title")
     _sub(sdtPr, "text")
@@ -461,8 +470,25 @@ def _cover_title_sdt():
     _sub(rpr2, "sz", val="56")
     _sub(rpr2, "b")
     t = _sub(r, "t")
-    t.text = "Insert title here"
+    t.text = "DocuSkills Brand Operations Review"
     return sdt
+
+
+def _cover_band(doc):
+    """BP-COVER-BAND: a navy brand banner paragraph with an amber bottom rule.
+
+    Carries ``w:pPr/w:shd`` navy fill + a thick amber ``w:pBdr`` bottom border.
+    Its text is EMPTY so ``_paragraph_is_placeholder_slot`` (which excludes empty
+    paragraphs) never promotes it to a 5th cover anchor; placed after the date
+    slot it leaves the ``sdt.0/para.1/para.2/para.3`` anchor indices stable.
+    """
+    p = doc.add_paragraph("")
+    pPr = p._p.get_or_add_pPr()
+    _sub(pPr, "shd", val="clear", color="auto", fill=DOCU_NAVY)
+    pbdr = _sub(pPr, "pBdr")
+    _sub(pbdr, "bottom", val="single", sz="24", space="2", color=DOCU_AMBER)
+    _sub(pPr, "spacing", before="60", after="180")
+    return p
 
 
 def _build_cover(doc):
@@ -472,12 +498,19 @@ def _build_cover(doc):
     body.insert(0, sdt)
 
     # 2..n) Placeholder paragraphs for subtitle / doc-id / date, each in the
-    # cover region (before the TOC), each a short single-line slot.
-    sub_p = _p(doc, "{{subtitle}} - an internal DocuSkills Corp brief", "DocuSkillsCoverSubtitle")
-    docid_p = doc.add_paragraph("Document ID: {{doc_id}}")
-    date_p = doc.add_paragraph("{{date}}")
-    # Move them right after the SDT (they were appended at the end of the body).
-    for p in (date_p._p, docid_p._p, sub_p._p):
+    # cover region (before the TOC), each a short single-line slot. The slot
+    # demo values are realistic synthetic content (CR-COVER-VALUES); the SDT
+    # title above now carries a realistic synthetic title (CR-COVER-TITLE) while
+    # still classifying as the title slot via its ``w:alias='Title'``.
+    sub_p = _p(doc, "Annual Brand Operations Review - DocuSkills Corp (synthetic)",
+               "DocuSkillsCoverSubtitle")
+    docid_p = doc.add_paragraph("Document ID: DSK-BR-2026-014")
+    date_p = doc.add_paragraph("June 5, 2026")
+    # A navy brand band sits BELOW the date slot (empty text, not an anchor).
+    band_p = _cover_band(doc)
+    # Move them right after the SDT (they were appended at the end of the body),
+    # preserving order: SDT -> subtitle -> doc-id -> date -> band.
+    for p in (band_p._p, date_p._p, docid_p._p, sub_p._p):
         body.remove(p)
         sdt.addnext(p)
 
@@ -550,8 +583,10 @@ def _build_index_front_matter(doc):
     _toc_heading(doc, "Table of Tables")
 
     def _tot_entries(d):
-        _toc_entry(d, "Table 1. DocuSkills quarterly revenue", 5, style="TableofFigures")
-        _toc_entry(d, "Table 2. DocuSkills regional split", 6, style="TableofFigures")
+        # Cached entries mirror the two real SEQ Table captions in the body and
+        # the landscape appendix (does NOT change the fields count).
+        _toc_entry(d, "Table 1. DocuSkills FY2026 quarterly revenue", 5, style="TableofFigures")
+        _toc_entry(d, "Table 2. DocuSkills program rollout matrix", 7, style="TableofFigures")
 
     _complex_field(doc, 'TOC \\h \\z \\c "Table" ', _tot_entries)
 
@@ -585,20 +620,28 @@ def _seq_caption(doc, prefix, seq_name, tail, *, style="Caption"):
 
 
 def _build_lists(doc):
-    _p(doc, "Key DocuSkills principles", "Heading1")
-    _p(doc, "First-level bullet about DocuSkills widgets", "DocuSkillsBulletL1")
-    _p(doc, "Second-level bullet detail", "DocuSkillsBulletL2")
-    _p(doc, "Another second-level detail", "DocuSkillsBulletL2")
-    _p(doc, "Another first-level bullet", "DocuSkillsBulletL1")
-    _p(doc, "DocuSkills rollout steps", "Heading2")
-    _p(doc, "Define the DocuSkills brand profile", "DocuSkillsNumberL1")
-    _p(doc, "Extract the template surface", "DocuSkillsNumberL1")
+    # CR-LISTS: realistic two-level bullet list (two L1 each with two L2
+    # children) + a numbered rollout sequence. Same style ids and structure as
+    # before, now exercising the L2 ilvl=1 binding (BUG-LIST-ILVL) properly.
+    _p(doc, "Brand operating principles", "Heading1")
+    _p(doc, "Consistency before customization", "DocuSkillsBulletL1")
+    _p(doc, "One palette: navy, teal, amber", "DocuSkillsBulletL2")
+    _p(doc, "Type scale fixed across all templates", "DocuSkillsBulletL2")
+    _p(doc, "Templates are contracts, not suggestions", "DocuSkillsBulletL1")
+    _p(doc, "Cover, contents, and indices are preserved", "DocuSkillsBulletL2")
+    _p(doc, "Body content is regenerated per request", "DocuSkillsBulletL2")
+    _p(doc, "Rollout sequence", "Heading2")
+    _p(doc, "Extract the template surface and brand profile", "DocuSkillsNumberL1")
+    _p(doc, "Review the captured slots and index front matter", "DocuSkillsNumberL1")
     _p(doc, "Generate the branded document", "DocuSkillsNumberL1")
 
 
 def _build_table(doc):
+    # CR-TABLE: header + four quarters of internally-consistent synthetic data.
+    # BUG-TABLE-NUMFMT: one currency style ($X.XXM) and one percent style
+    # (+X.X%) across every row, so the columns read as formatted figures.
     _p(doc, "DocuSkills quarterly revenue", "Heading2")
-    table = doc.add_table(rows=3, cols=4)
+    table = doc.add_table(rows=5, cols=4)
     table.style = "DocuSkills Table"
     # Tell Word which conditional formats to apply (first row + banding).
     tblPr = table._tbl.tblPr
@@ -608,13 +651,16 @@ def _build_table(doc):
     for c, label in zip(table.rows[0].cells, hdr):
         c.text = label
     data = [
-        ("Q1", "$3.2M", "+8%", "North"),
-        ("Q2", "$3.5M", "+9%", "South"),
+        ("Q1 2026", "$3.20M", "+8.4%", "North"),
+        ("Q2 2026", "$3.48M", "+8.8%", "South"),
+        ("Q3 2026", "$3.91M", "+12.4%", "EMEA"),
+        ("Q4 2026", "$4.25M", "+8.7%", "APAC"),
     ]
     for r, row in enumerate(data, start=1):
         for c, val in zip(table.rows[r].cells, row):
             c.text = val
-    _seq_caption(doc, "Table", "Table", "DocuSkills quarterly revenue (demo data).")
+    _seq_caption(doc, "Table", "Table",
+                 "DocuSkills FY2026 quarterly revenue by region (synthetic data).")
 
 
 def _build_figure(doc, logo_rid, logo_cx, logo_cy):
@@ -627,11 +673,12 @@ def _build_figure(doc, logo_rid, logo_cx, logo_cy):
 
 
 def _build_callout(doc):
+    # CR-CALLOUT: an on-brand synthetic note (not a meta tooling instruction).
     _p(
         doc,
-        "Note: this is a synthetic DocuSkills Corp callout box. Replace the body "
-        "content during generation; the cover and the index front matter are "
-        "preserved.",
+        "DocuSkills Corp is a synthetic, fictional company used to demonstrate an "
+        "on-brand internal brief. All figures, names, and regions in this template "
+        "are illustrative.",
         "DocuSkillsCallout",
     )
 
@@ -649,16 +696,21 @@ def _build_footnote_paragraph(doc, footnote_id):
 
 
 def _build_demo_body(doc):
-    _p(doc, "Example heading", "Heading1")
+    # CR-DEMO-BODY: keep the H1 + para + H2 + para demo region, but replace the
+    # lorem filler with readable synthetic prose. detect_demo_region keys on the
+    # first body-region Heading-1 structurally (style id + captured own text),
+    # so demo_region.present stays True with realistic copy.
+    _p(doc, "Overview", "Heading1")
     doc.add_paragraph(
-        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. This demo "
-        "paragraph is instruction content that a generation run should clear "
-        "and replace with the user's real DocuSkills content."
+        "This brief summarizes how the DocuSkills Corp brand system is applied "
+        "across internal documents. It exists to show a complete, on-brand "
+        "template; a generation run replaces this body with the requested content."
     )
-    _p(doc, "Example subheading", "Heading2")
+    _p(doc, "Methodology", "Heading2")
     doc.add_paragraph(
-        "Praesent commodo cursus magna. Curabitur blandit tempus porttitor. "
-        "DocuSkills Corp placeholder body text continues here."
+        "Figures are drawn from a synthetic operations dataset maintained by the "
+        "DocuSkills brand office. Revenue, growth, and regional splits are "
+        "illustrative and should not be read as real performance data."
     )
 
 
@@ -751,7 +803,24 @@ def _relate_image_to(part, image_blob, partname="media/image1.png"):
 # SECTIONS - convert the document into a portrait section followed by a
 # landscape section.
 # ---------------------------------------------------------------------------
-def _add_landscape_section(doc):
+def _set_col_widths(table, widths_twips):
+    """Pin explicit per-column widths (Twips) on a table so a wide landscape
+    table fits the usable page width without column clipping (PL-PRINT-MARGINS).
+
+    Disables autofit and stamps ``w:tcW`` (dxa) on every cell of every column,
+    which is how Word honours fixed column widths.
+    """
+    table.autofit = False
+    table.allow_autofit = False
+    tblPr = table._tbl.tblPr
+    layout = _sub(tblPr, "tblLayout")
+    layout.set(_w("type"), "fixed")
+    for row in table.rows:
+        for cell, w_tw in zip(row.cells, widths_twips):
+            cell.width = Twips(w_tw)
+
+
+def _add_landscape_section(doc, curve_rid=None, fig_cx=0, fig_cy=0):
     new_section = doc.add_section(WD_SECTION.NEW_PAGE)
     new_section.orientation = WD_ORIENT.LANDSCAPE
     # Swap page width/height for landscape (python-docx does not auto-swap).
@@ -759,9 +828,52 @@ def _add_landscape_section(doc):
     new_section.page_height = Twips(12240)  # 8.5"
     _p(doc, "DocuSkills landscape appendix", "Heading1")
     doc.add_paragraph(
-        "This appendix sits in a landscape section. Wide DocuSkills tables and figures "
-        "live here. Demo content the generator may clear."
+        "This appendix sits in a landscape section. It carries a wide program "
+        "rollout matrix and a second brand figure that the portrait body cannot "
+        "fit. Demo content the generator may clear."
     )
+
+    # PL-LANDSCAPE-CONTENT: a wide 7-column synthetic "program rollout matrix",
+    # reusing the same custom table style + tblLook (banding exercised again).
+    _p(doc, "Program rollout matrix", "Heading2")
+    wide = doc.add_table(rows=5, cols=7)
+    wide.style = "DocuSkills Table"
+    wtblPr = wide._tbl.tblPr
+    _sub(wtblPr, "tblLook", firstRow="1", lastRow="0", firstColumn="0",
+         lastColumn="0", noHBand="0", noVBand="1")
+    whdr = ("Workstream", "Owner", "Q1", "Q2", "Q3", "Q4", "Status")
+    for c, label in zip(wide.rows[0].cells, whdr):
+        c.text = label
+    wdata = [
+        ("Template surface", "Brand Office", "Scope", "Build", "QA", "Ship", "On track"),
+        ("Profile extraction", "Platform", "Spec", "Build", "Verify", "Tune", "On track"),
+        ("Generation engine", "Platform", "Design", "Build", "Build", "Verify", "At risk"),
+        ("Rollout & training", "Enablement", "Plan", "Draft", "Pilot", "Launch", "Planned"),
+    ]
+    for r, row in enumerate(wdata, start=1):
+        for c, val in zip(wide.rows[r].cells, row):
+            c.text = val
+    # PL-PRINT-MARGINS: fixed column widths sum to 13680 twips (15840 - 2*1in
+    # margins), so the 7-column table fits the landscape usable width.
+    _set_col_widths(wide, (2880, 2400, 1680, 1680, 1680, 1680, 1680))
+    _seq_caption(doc, "Table", "Table",
+                 "DocuSkills FY2026 program rollout matrix (synthetic).")
+
+    # PL-LANDSCAPE-CAPTION-SEQ / CR-FIG2-CURVE: a real SECOND inline figure so the
+    # cached "Figure 2" in the Table of Figures corresponds to a rendered figure.
+    # This is a DISTINCT media part (word/media/image2.png, the growth-curve PNG),
+    # NOT a reuse of the logo - Figure 2 is a real rising growth curve, not the
+    # brand mark. The curve PNG is ~12:5, so the inline extent matches that aspect.
+    if curve_rid is not None:
+        _p(doc, "DocuSkills growth curve", "Heading2")
+        fp = doc.add_paragraph()
+        fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        frun = fp.add_run()
+        frun._r.append(
+            _inline_drawing(curve_rid, fig_cx, fig_cy, "DocuSkillsGrowthFigure", 300)
+        )
+        _seq_caption(doc, "Figure", "Figure",
+                     "DocuSkills Corp growth curve (synthetic illustration).")
     return new_section
 
 
@@ -795,10 +907,15 @@ def build(out: Path = OUT) -> Path:
         f"{R}/footnotes",
     )
 
-    # 4) Shared logo image; relate it to the document part (for the figure) and
-    # to the header part (for the header logo) independently.
-    logo_blob = _synthetic_logo_png()
+    # 4) Shared brand-mark image (the hero.svg glyph): a SQUARE navy rounded tile
+    # with the blue stroke + filled/outlined blue bars. The SAME mark every
+    # DocuSkills template embeds (CR-LOGO-MARK). Related to the document part (for
+    # Figure 1) and to the header part (for the header logo) independently. A
+    # SECOND media part carries the real growth-curve figure (CR-FIG2-CURVE).
+    logo_blob = docuskills_mark_png(256)          # square brand mark (image1.png)
+    curve_blob = docuskills_curve_png(480, 200)   # ~12:5 growth curve (image2.png)
     doc_logo_rid = _relate_image_to(doc.part, logo_blob)
+    doc_curve_rid = _relate_image_to(doc.part, curve_blob, partname="media/image2.png")
 
     # 5) Cover (block-level SDT title + placeholder slots), then the three index
     # fields, then the demo body. add_* appends in document order, so build the
@@ -809,8 +926,11 @@ def build(out: Path = OUT) -> Path:
     # Body content (freeform; a generation clears this region).
     _build_lists(doc)
     _build_table(doc)
-    # Figure uses the document-part image relationship.
-    fig_cx, fig_cy = 914400, 304800  # 1.0in x ~0.33in @ EMU
+    # Figure 1 (the brand mark) uses the document-part image relationship.
+    # BUG-FIG-ASPECT: the brand mark PNG is SQUARE, so the inline extent MUST be
+    # square too - ``noChangeAspect=1`` would otherwise distort a non-square box.
+    # 1097280 EMU = 1.2in on each side.
+    fig_cx, fig_cy = 1097280, 1097280
     _build_figure(doc, doc_logo_rid, fig_cx, fig_cy)
     _build_callout(doc)
     _build_footnote_paragraph(doc, footnote_id=2)
@@ -820,10 +940,18 @@ def build(out: Path = OUT) -> Path:
     # relationship to the shared image part.
     section = doc.sections[0]
     header_logo_rid = _relate_image_to(section.header.part, logo_blob)
-    _build_header_footer(doc, header_logo_rid, 762000, 254000)
+    # Header logo is the SAME square brand mark, so its extent is square too:
+    # 360000 EMU on each side (~0.39in) - a compact header glyph, undistorted.
+    _build_header_footer(doc, header_logo_rid, 360000, 360000)
 
-    # 7) A second, landscape section after the portrait body.
-    _add_landscape_section(doc)
+    # 7) A second, landscape section after the portrait body. It carries a wide
+    # rollout-matrix table and a real second figure (the cached "Figure 2"),
+    # which is the DISTINCT growth-curve media part (word/media/image2.png).
+    # The curve PNG is 480x200 (~12:5), so the extent matches: cx=2286000 EMU
+    # (2.5in), cy=2286000*5//12=952500 EMU (exact 12:5, no distortion).
+    land_fig_cx, land_fig_cy = 2286000, 952500
+    _add_landscape_section(doc, curve_rid=doc_curve_rid,
+                           fig_cx=land_fig_cx, fig_cy=land_fig_cy)
 
     # 8) Ask Word to refresh the cached fields on open.
     _request_update_fields(doc)

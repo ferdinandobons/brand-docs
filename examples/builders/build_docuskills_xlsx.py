@@ -20,8 +20,10 @@ across as many Excel component types as openpyxl can author:
   * A native TABLE object (``DocuSkillsDataTbl``) with a banded table style.
   * CONDITIONAL FORMATTING: a color scale, a cell-is rule, and a formula rule.
   * FROZEN PANES on the data sheets.
-  * A synthetic LOGO image placed in a worksheet header (drawing) - generated
-    in-process (no external/proprietary asset on disk).
+  * The shared DocuSkills brand MARK (the assets/hero.svg glyph) placed as a
+    worksheet drawing on the cover brand band - rendered in-process by
+    ``_brandlib.docuskills_mark_png`` (no external/proprietary asset on disk),
+    sized SQUARE so the square PNG is not distorted.
   * Named cell STYLES (``DocuSkillsTitle``, ``DocuSkillsHeader``, ``DocuSkillsCurrency``,
     ``DocuSkillsPercent``, ``DocuSkillsInput``) registered on the workbook and applied.
   * Demo / sample data rows the generator is expected to clear.
@@ -34,18 +36,17 @@ Run:
 """
 from __future__ import annotations
 
-import struct
-import zlib
 from pathlib import Path
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, Reference, Series
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from _brandlib import freeze_ooxml, rgba
+from _brandlib import docuskills_mark_png, freeze_ooxml
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
@@ -58,40 +59,11 @@ DOCU_AMBER = "FFE0742B"
 DOCU_LIGHT = "FFEAF1FF"
 WHITE = "FFFFFFFF"
 
-
-# ---------------------------------------------------------------------------
-# A tiny synthetic PNG logo generated in-process (no external asset).
-# ---------------------------------------------------------------------------
-def _synthetic_logo_png() -> bytes:
-    """Return a deterministic 64x24 RGBA PNG: a DocuSkills navy field with an
-    amber stripe (colours derived from the brand palette constants).
-
-    Hand-built so the example template carries a real <xdr:pic> drawing in a
-    header without committing any external/proprietary image - purely a
-    decorative brand mark.
-    """
-    w, h = 64, 24
-    navy = rgba(DOCU_NAVY)
-    amber = rgba(DOCU_AMBER)
-    raw = bytearray()
-    for y in range(h):
-        raw.append(0)  # PNG filter type 0 (None) per scanline
-        for x in range(w):
-            px = amber if (8 <= y < 16 and 4 <= x < 60) else navy
-            raw.extend(px)
-
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        return (
-            struct.pack(">I", len(data))
-            + tag
-            + data
-            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-        )
-
-    sig = b"\x89PNG\r\n\x1a\n"
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)  # 8-bit RGBA
-    idat = zlib.compress(bytes(raw), 9)
-    return sig + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
+# 6-digit (no alpha) variants for openpyxl chart series fills, derived from the
+# brand palette constants above (no new brand literals introduced).
+NAVY6 = DOCU_NAVY[-6:]   # "16213F"
+TEAL6 = DOCU_TEAL[-6:]   # "2B7CD3"
+AMBER6 = DOCU_AMBER[-6:]  # "E0742B"
 
 
 # ---------------------------------------------------------------------------
@@ -138,26 +110,44 @@ def _build_cover(wb: Workbook) -> None:
     ws.sheet_view.showGridLines = False
     # Merged title band A1:E1 with a single-cell named title anchor at A1.
     ws.merge_cells("A1:E1")
-    ws["A1"] = "{{report_title}}"
+    # Title band: navy fill + white title text so the cover reads as branded.
+    ws["A1"] = "FY2025 Revenue Performance Review"
     ws["A1"].style = "DocuSkillsTitle"
+    ws["A1"].font = Font(name="Arial", size=20, bold=True, color=WHITE)
+    ws["A1"].fill = PatternFill("solid", fgColor=DOCU_NAVY)
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
     ws.merge_cells("A2:E2")
-    ws["A2"] = "{{report_subtitle}}"
+    ws["A2"] = "Quarterly revenue model and executive summary"
     ws["A2"].font = Font(name="Arial", size=12, italic=True, color=DOCU_TEAL)
     ws["A2"].alignment = Alignment(horizontal="center")
     ws["A4"] = "Prepared for"
-    ws["B4"] = "{{client_name}}"
+    ws["B4"] = "DocuSkills Corp (synthetic demo)"
     ws["A5"] = "Reporting period"
-    ws["B5"] = "{{period}}"
-    # An ISO-date cell with a date number format.
+    ws["B5"] = "FY2025 (Q1-Q4)"
+    # An ISO-date cell with a date number format (pinned, deterministic).
     ws["A6"] = "Generated on"
     ws["B6"] = "2026-01-15"
     ws["B6"].number_format = "yyyy-mm-dd"
-    # Header drawing: the synthetic logo lives in the sheet header band.
+    # A navy brand band across the printable width, below the text block.
+    ws.merge_cells("A8:E8")
+    for col in range(1, 6):
+        ws.cell(row=8, column=col).fill = PatternFill("solid", fgColor=DOCU_NAVY)
+    ws.row_dimensions[8].height = 24
+    # Header drawing: the shared DocuSkills brand mark (same glyph as
+    # assets/hero.svg) sits on the brand band, inside the printable area
+    # (A1:E9) so it no longer spills onto a second print page. The mark PNG is
+    # SQUARE, so the drawing is sized SQUARE (64x64 px) to avoid distorting it.
     logo = XLImage(_logo_path())
-    logo.width, logo.height = 96, 36
-    ws.add_image(logo, "G1")
+    logo.width, logo.height = 64, 64
+    ws.add_image(logo, "A8")
     ws.column_dimensions["A"].width = 18
     ws.column_dimensions["B"].width = 28
+    # Keep the whole cover on a single print page.
+    ws.print_area = "A1:E9"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
 
 def _build_inputs(wb: Workbook) -> None:
@@ -169,9 +159,11 @@ def _build_inputs(wb: Workbook) -> None:
         c = ws.cell(row=3, column=col, value=label)
         c.style = "DocuSkillsHeader"
     # Input block rows 4..7 (the named INPUTS region, demo values).
+    # Reconciled so Implied gross (Units * Price) == Model Gross revenue FY
+    # (29070 * 50 = 1,453,500), giving Net margin = 85.0% (sensible range).
     inputs = [
-        ("Units sold", 1200, "ea"),
-        ("Unit price", 49.5, "USD"),
+        ("Units sold", 29070, "ea"),
+        ("Unit price", 50.0, "USD"),
         ("Discount rate", 0.12, "pct"),
         ("Tax rate", 0.22, "pct"),
     ]
@@ -184,6 +176,10 @@ def _build_inputs(wb: Workbook) -> None:
             vc.style = "DocuSkillsCurrency"
         elif unit == "pct":
             vc.style = "DocuSkillsPercent"
+        elif unit == "ea":
+            # Whole-unit counts get a thousands separator so "Units sold" reads
+            # "29,070" instead of "29070" (keeps the input fill/border style).
+            vc.number_format = "#,##0"
         ws.cell(row=r, column=3, value=unit).style = "DocuSkillsInput"
     ws.freeze_panes = "A4"
     ws.column_dimensions["A"].width = 18
@@ -212,7 +208,8 @@ def _build_model(wb: Workbook) -> None:
             # Net revenue = sum of the three lines above, per quarter.
             for col in range(2, 6):
                 L = get_column_letter(col)
-                ws.cell(row=r, column=col, value=f"=SUM({L}4:{L}6)")
+                c = ws.cell(row=r, column=col, value=f"=SUM({L}4:{L}6)")
+                c.number_format = "#,##0"
         else:
             for col, val in zip(range(2, 6), row[1:]):
                 c = ws.cell(row=r, column=col, value=val)
@@ -255,18 +252,36 @@ def _build_model(wb: Workbook) -> None:
                     fill=PatternFill("solid", fgColor="FFFFC7CE")),
     )
     ws.freeze_panes = "B4"
-    for col in range(1, 8):
-        ws.column_dimensions[get_column_letter(col)].width = 14
+    # Wider label column, tighter numeric columns so the table + chart fit a page.
+    ws.column_dimensions["A"].width = 16
+    for col in range(2, 8):
+        ws.column_dimensions[get_column_letter(col)].width = 12
 
-    # A native CHART driven by the model body (bar of quarter columns).
+    # A native CHART driven by the model Net revenue row (one series, 4 points
+    # across the Q1..Q4 categories).
     chart = BarChart()
     chart.title = "Quarterly net revenue"
     chart.type = "col"
-    data = Reference(ws, min_col=2, min_row=7, max_col=5, max_row=7)
-    cats = Reference(ws, min_col=2, min_row=3, max_col=5, max_row=3)
-    chart.add_data(data, titles_from_data=False)
+    data = Reference(ws, min_col=2, min_row=7, max_col=5, max_row=7)  # B7:E7
+    cats = Reference(ws, min_col=2, min_row=3, max_col=5, max_row=3)  # Q1..Q4
+    chart.add_data(data, titles_from_data=False, from_rows=True)
     chart.set_categories(cats)
-    ws.add_chart(chart, "I3")
+    # Brand: single navy/teal series, no redundant legend, clean axes.
+    chart.series[0].graphicalProperties.solidFill = TEAL6
+    chart.legend = None
+    chart.y_axis.numFmt = "#,##0"
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.width = 14
+    chart.height = 8
+    # Anchor the chart below the table so it stays within the print page.
+    ws.add_chart(chart, "A11")
+    # Contain the sheet on a single landscape page.
+    ws.print_area = "A1:G27"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
     # A second chart (line) on the Summary sheet is added there.
 
@@ -285,6 +300,7 @@ def _build_summary(wb: Workbook) -> None:
     ws["B4"].number_format = "#,##0"
     ws["A5"] = "Units sold (input)"
     ws["B5"] = "=Inputs!B4"
+    ws["B5"].number_format = "#,##0"  # thousands separator: "29,070"
     ws["A6"] = "Unit price (input)"
     ws["B6"] = "=Inputs!B5"
     ws["B6"].style = "DocuSkillsCurrency"
@@ -295,18 +311,37 @@ def _build_summary(wb: Workbook) -> None:
     ws["B8"] = "=IF(B7=0,0,B4/B7)"
     ws["B8"].style = "DocuSkillsPercent"
     ws["A9"] = "Headline KPI"
-    ws["B9"] = "{{headline_kpi}}"  # a single-cell named output slot
+    ws["B9"] = "85% net margin on $1.45M gross"  # single-cell named output slot
     ws.freeze_panes = "A4"
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 16
 
-    # A LINE chart on the summary referencing the model FY total row.
+    # A LINE chart on the summary tracking Net revenue per quarter (cross-sheet
+    # reference into the Model sheet), coherent with the Model bar chart.
     model = wb["Model"]
     chart = LineChart()
-    chart.title = "FY total by line item"
-    data = Reference(model, min_col=6, min_row=3, max_col=6, max_row=7)
-    chart.add_data(data, titles_from_data=True)
-    ws.add_chart(chart, "D3")
+    chart.title = "Net revenue trend (Q1-Q4)"
+    data = Reference(model, min_col=2, min_row=7, max_col=5, max_row=7)  # B7:E7
+    cats = Reference(model, min_col=2, min_row=3, max_col=5, max_row=3)  # Q1..Q4
+    chart.add_data(data, titles_from_data=False, from_rows=True)
+    chart.set_categories(cats)
+    # Name the single series so the legend reads sensibly.
+    chart.series[0].tx = SeriesLabel(v="Net revenue")
+    # Brand: amber line, clean axes, legend below to avoid extra width.
+    chart.series[0].graphicalProperties.line.solidFill = AMBER6
+    chart.series[0].graphicalProperties.line.width = 28000  # EMU (~2.2pt)
+    chart.series[0].smooth = False
+    chart.y_axis.numFmt = "#,##0"
+    chart.x_axis.delete = False
+    chart.y_axis.delete = False
+    chart.legend.position = "b"
+    chart.width = 14
+    chart.height = 8
+    # Anchor below the metric table, keep on a single page.
+    ws.add_chart(chart, "A11")
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
 
 def _build_data(wb: Workbook) -> None:
@@ -364,13 +399,20 @@ _LOGO_CACHE: Path | None = None
 
 
 def _logo_path() -> Path:
-    """Materialize the synthetic logo to a temp file openpyxl can embed."""
+    """Materialize the shared DocuSkills brand mark to a temp file openpyxl can
+    embed.
+
+    Uses ``docuskills_mark_png`` so the cover logo is the SAME navy rounded-square
+    glyph as ``assets/hero.svg`` (blue stroke, filled blue header bar, outlined
+    blue field below). The PNG is square, so the cover drawing is sized square to
+    avoid distorting it.
+    """
     global _LOGO_CACHE
     if _LOGO_CACHE is None:
         import tempfile
 
         tmp = Path(tempfile.gettempdir()) / "docuskills_template_logo.png"
-        tmp.write_bytes(_synthetic_logo_png())
+        tmp.write_bytes(docuskills_mark_png(256))
         _LOGO_CACHE = tmp
     return _LOGO_CACHE
 

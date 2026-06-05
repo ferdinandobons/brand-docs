@@ -7,12 +7,19 @@ binaries committed here are safe by construction.
 
 | Template | Built by | What it stresses |
 |---|---|---|
-| [`templates/docuskills_template.docx`](templates/docuskills_template.docx) | [`builders/build_docuskills_docx.py`](builders/build_docuskills_docx.py) | multi-slot cover, three indexes (TOC + table + figure), real `numbering.xml` (2-level bullets + numbered list), a custom **DocuSkills Table** style, `SEQ` captions, a boxed **DocuSkills Callout**, a header logo, two sections, a footnote |
+| [`templates/docuskills_template.docx`](templates/docuskills_template.docx) | [`builders/build_docuskills_docx.py`](builders/build_docuskills_docx.py) | multi-slot cover, three indexes (TOC + table + figure), real `numbering.xml` (2-level bullets + numbered list), a custom **DocuSkills Table** style, `SEQ` captions, a boxed **DocuSkills Callout** with an amber accent bar, a header logo, two sections (portrait + a populated landscape appendix carrying a wide rollout-matrix table and a second figure), a footnote |
 | [`templates/docuskills_template.pptx`](templates/docuskills_template.pptx) | [`builders/build_docuskills_pptx.py`](builders/build_docuskills_pptx.py) | multi-placeholder cover, the deck's real masters & layouts, sections, an agenda slide, a native table + chart, a picture, a demo slide |
-| [`templates/docuskills_template.xlsx`](templates/docuskills_template.xlsx) | [`builders/build_docuskills_xlsx.py`](builders/build_docuskills_xlsx.py) | five sheets, named regions, cross-sheet formulas, number formats, named cell styles, a table, conditional formatting, frozen panes, a chart |
+| [`templates/docuskills_template.xlsx`](templates/docuskills_template.xlsx) | [`builders/build_docuskills_xlsx.py`](builders/build_docuskills_xlsx.py) | five sheets, named regions, cross-sheet formulas, number formats, named cell styles, a table, conditional formatting, frozen panes, two native charts (a branded bar + a line) |
 
 Brand palette (cohesive with the project hero): DocuSkills navy `#16213F`, blue `#2B7CD3`,
 amber `#E0742B`, on light `#EAF1FF` / band `#DCE7FF`.
+
+Each template ships realistic, internally-consistent **synthetic** sample content and visible
+brand polish — a coloured cover band, the generated DocuSkills brand mark (the `assets/hero.svg`
+glyph), and brand-coloured native charts — so the rendered file already reads as a finished
+on-brand document. The body is
+demo content a generation run clears and replaces; the cover, indexes and named slots are the
+reusable surface the skills extract.
 
 ## Try them
 
