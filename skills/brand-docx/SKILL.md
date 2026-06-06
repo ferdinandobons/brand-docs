@@ -131,7 +131,8 @@ the Python engine never calls a model. To run the full two-stage audit:
 
 1. Generate with `--qa deep`. The engine renders each page to a PNG, runs the L1
    proxies, and writes `visual_manifest.json` next to the output in an
-   `<output>.visual/` dir (a side artifact; the `.docx` bytes never change).
+   `<output-file>.visual/` dir, such as `report.docx.visual/` (a side artifact;
+   the `.docx` bytes never change).
 2. Read the manifest path from stdout (`visual manifest: <path>`).
 3. Open the PNGs listed in `pages[*].png`. For every entry in `checklist`, judge
    PASS/FAIL against the rendered pages, taking `l1_findings` into account.

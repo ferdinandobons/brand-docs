@@ -6,7 +6,7 @@ Produces ``examples/templates/branddocs_template.xlsx``: a 100% synthetic
 across as many Excel component types as openpyxl can author:
 
   * MULTIPLE sheets in a deliberate tab order (Cover, Inputs, Model, Summary,
-    Data) - exercises multi-sheet structure + skeleton ordering.
+    Dashboard, Scenarios, Data) - exercises multi-sheet structure + skeleton ordering.
   * NAMED regions of every geometry the extractor distinguishes:
       - a single-cell title anchor sitting under a MERGED header row,
       - a single-cell that sits in a FROZEN header band,
@@ -18,12 +18,15 @@ across as many Excel component types as openpyxl can author:
     authored verbatim so we can later assert they survive generation byte-exact.
   * NUMBER FORMATS: currency (accounting), percent, thousands, and ISO date.
   * A native TABLE object (``BrandDocsDataTbl``) with a banded table style.
+  * A dashboard sheet with KPI cards, cross-sheet formulas, and a third native
+    chart so the rendered workbook looks like a finished executive model.
+  * A scenarios sheet with list validation and a native scenario table.
   * CONDITIONAL FORMATTING: a color scale, a cell-is rule, and a formula rule.
   * FROZEN PANES on the data sheets.
-  * The shared BrandDocs brand MARK (the assets/hero.svg glyph) placed as a
-    worksheet drawing on the cover brand band - rendered in-process by
-    ``_brandlib.branddocs_mark_png`` (no external/proprietary asset on disk),
-    sized SQUARE so the square PNG is not distorted.
+  * The shared text-only BrandDocs wordmark placed as a worksheet drawing on the
+    cover - rendered in-process by ``_brandlib.branddocs_mark_png`` (no
+    external/proprietary asset on disk), sized at 4:1 so the text is not
+    distorted.
   * Named cell STYLES (``BrandDocsTitle``, ``BrandDocsHeader``, ``BrandDocsCurrency``,
     ``BrandDocsPercent``, ``BrandDocsInput``) registered on the workbook and applied.
   * Demo / sample data rows the generator is expected to clear.
@@ -39,12 +42,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.chart import BarChart, LineChart, Reference, Series
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.drawing.image import Image as XLImage
-from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, FormulaRule
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, DataBarRule, FormulaRule
 from openpyxl.styles import Alignment, Border, Font, NamedStyle, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 
 from _brandlib import branddocs_mark_png, freeze_ooxml
 from openpyxl.workbook.defined_name import DefinedName
@@ -98,7 +103,13 @@ def _register_named_styles(wb: Workbook) -> None:
     inp.font = Font(name="Calibri", size=11, color=BRAND_NAVY)
     inp.border = border
 
-    for style in (title, header, currency, percent, inp):
+    kpi = NamedStyle(name="BrandDocsKPI")
+    kpi.fill = PatternFill("solid", fgColor=BRAND_NAVY)
+    kpi.font = Font(name="Arial", size=15, bold=True, color=WHITE)
+    kpi.alignment = Alignment(horizontal="center", vertical="center")
+    kpi.border = border
+
+    for style in (title, header, currency, percent, inp, kpi):
         wb.add_named_style(style)
 
 
@@ -108,8 +119,8 @@ def _register_named_styles(wb: Workbook) -> None:
 def _build_cover(wb: Workbook) -> None:
     ws = wb.create_sheet("Cover")
     ws.sheet_view.showGridLines = False
-    # Merged title band A1:E1 with a single-cell named title anchor at A1.
-    ws.merge_cells("A1:E1")
+    # Merged title band A1:G1 with a single-cell named title anchor at A1.
+    ws.merge_cells("A1:G1")
     # Title band: navy fill + white title text so the cover reads as branded.
     ws["A1"] = "FY2025 Revenue Performance Review"
     ws["A1"].style = "BrandDocsTitle"
@@ -117,7 +128,7 @@ def _build_cover(wb: Workbook) -> None:
     ws["A1"].fill = PatternFill("solid", fgColor=BRAND_NAVY)
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
-    ws.merge_cells("A2:E2")
+    ws.merge_cells("A2:G2")
     ws["A2"] = "Quarterly revenue model and executive summary"
     ws["A2"].font = Font(name="Arial", size=12, italic=True, color=BRAND_TEAL)
     ws["A2"].alignment = Alignment(horizontal="center")
@@ -129,22 +140,43 @@ def _build_cover(wb: Workbook) -> None:
     ws["A6"] = "Generated on"
     ws["B6"] = "2026-01-15"
     ws["B6"].number_format = "yyyy-mm-dd"
-    # A navy brand band across the printable width, below the text block.
-    ws.merge_cells("A8:E8")
-    for col in range(1, 6):
+    # Three scorecard tiles make the cover read as an executive-ready workbook.
+    scorecards = [
+        ("D4", "FY net revenue", "=Summary!B4"),
+        ("E4", "Net margin", "=Summary!B8"),
+        ("F4", "Brand audit", "Deep QA"),
+    ]
+    for anchor, label, value in scorecards:
+        col = ws[anchor].column
+        ws.cell(row=4, column=col, value=label).style = "BrandDocsHeader"
+        vc = ws.cell(row=5, column=col, value=value)
+        vc.style = "BrandDocsKPI"
+        if value.startswith("="):
+            vc.number_format = "0.0%" if "B8" in value else "#,##0"
+    ws["G4"] = "Scope"
+    ws["G4"].style = "BrandDocsHeader"
+    ws["G5"] = "3 formats"
+    ws["G5"].style = "BrandDocsKPI"
+    ws["G5"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # A navy brand band across the printable width, below the scorecards.
+    ws.merge_cells("A8:G8")
+    for col in range(1, 8):
         ws.cell(row=8, column=col).fill = PatternFill("solid", fgColor=BRAND_NAVY)
-    ws.row_dimensions[8].height = 24
-    # Header drawing: the shared BrandDocs brand mark (same glyph as
-    # assets/hero.svg) sits on the brand band, inside the printable area
-    # (A1:E9) so it no longer spills onto a second print page. The mark PNG is
-    # SQUARE, so the drawing is sized SQUARE (64x64 px) to avoid distorting it.
+    ws.row_dimensions[8].height = 28
+    # Header drawing: the shared BrandDocs wordmark sits inside the printable
+    # area at a 4:1 aspect ratio so the text is not distorted.
     logo = XLImage(_logo_path())
-    logo.width, logo.height = 64, 64
-    ws.add_image(logo, "A8")
+    logo.width, logo.height = 180, 45
+    ws.add_image(logo, "A9")
     ws.column_dimensions["A"].width = 18
     ws.column_dimensions["B"].width = 28
+    for col in "CDEFG":
+        ws.column_dimensions[col].width = 16
+    for row in (4, 5):
+        ws.row_dimensions[row].height = 28
     # Keep the whole cover on a single print page.
-    ws.print_area = "A1:E9"
+    ws.print_area = "A1:G13"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 1
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -344,6 +376,112 @@ def _build_summary(wb: Workbook) -> None:
     ws.sheet_properties.pageSetUpPr.fitToPage = True
 
 
+def _build_dashboard(wb: Workbook) -> None:
+    """Executive dashboard with formula-backed KPI cards and a native chart."""
+    ws = wb.create_sheet("Dashboard")
+    ws.sheet_view.showGridLines = False
+    ws["A1"] = "Executive Dashboard"
+    ws["A1"].font = Font(name="Arial", size=18, bold=True, color=BRAND_NAVY)
+    ws.merge_cells("A1:G1")
+    ws["A2"] = "Formula-backed snapshot generated from the model, inputs, and summary tabs"
+    ws["A2"].font = Font(name="Arial", size=11, italic=True, color=BRAND_TEAL)
+    ws.merge_cells("A2:G2")
+
+    kpis = [
+        (1, "FY net revenue", "=Summary!B4", "#,##0"),
+        (3, "Net margin", "=Summary!B8", "0.0%"),
+        (5, "Input units", "=Summary!B5", "#,##0"),
+        (7, "Scenario", "=Scenarios!B3", "@"),
+    ]
+    for start_col, label, formula, number_format in kpis:
+        ws.merge_cells(start_row=4, start_column=start_col, end_row=4, end_column=start_col + 1)
+        ws.merge_cells(start_row=5, start_column=start_col, end_row=5, end_column=start_col + 1)
+        cell = ws.cell(row=4, column=start_col, value=label)
+        cell.style = "BrandDocsHeader"
+        value_cell = ws.cell(row=5, column=start_col, value=formula)
+        value_cell.style = "BrandDocsKPI"
+        value_cell.number_format = number_format
+        value_cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws["A7"] = "Quarter"
+    ws["B7"] = "Net revenue"
+    ws["C7"] = "Growth"
+    for cell in ws["A7:C7"][0]:
+        cell.style = "BrandDocsHeader"
+    for i, q in enumerate(("Q1", "Q2", "Q3", "Q4"), start=8):
+        qidx = i - 7
+        ws.cell(row=i, column=1, value=q)
+        ws.cell(row=i, column=2, value=f"=Model!{get_column_letter(qidx + 1)}7")
+        ws.cell(row=i, column=2).number_format = "#,##0"
+        if i == 8:
+            ws.cell(row=i, column=3, value="-")
+        else:
+            ws.cell(row=i, column=3, value=f"=IF(B{i-1}=0,0,B{i}/B{i-1}-1)")
+            ws.cell(row=i, column=3).number_format = "0.0%"
+    ws.conditional_formatting.add(
+        "B8:B11",
+        DataBarRule(start_type="min", end_type="max", color=TEAL6, showValue=True),
+    )
+
+    chart = BarChart()
+    chart.title = "Net revenue"
+    chart.add_data(Reference(ws, min_col=2, min_row=7, max_row=11), titles_from_data=True)
+    chart.set_categories(Reference(ws, min_col=1, min_row=8, max_row=11))
+    chart.series[0].graphicalProperties.solidFill = TEAL6
+    chart.legend = None
+    chart.width = 8.5
+    chart.height = 6
+    ws.add_chart(chart, "E8")
+    for col, width in zip("ABCDEFGH", (12, 12, 12, 3, 12, 12, 12, 12)):
+        ws.column_dimensions[col].width = width
+    ws.print_area = "A1:H24"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+def _build_scenarios(wb: Workbook) -> None:
+    ws = wb.create_sheet("Scenarios")
+    ws["A1"] = "Scenario Controls"
+    ws["A1"].font = Font(name="Arial", size=14, bold=True, color=BRAND_NAVY)
+    ws["A3"] = "Selected scenario"
+    ws["B3"] = "Base"
+    ws["B3"].style = "BrandDocsInput"
+    dv = DataValidation(type="list", formula1='"Base,Upside,Downside"', allow_blank=False)
+    ws.add_data_validation(dv)
+    dv.add(ws["B3"])
+    ws["B3"].comment = Comment("Synthetic scenario selector used by formulas and visual QA.", "BrandDocs")
+    headers = ("Scenario", "Revenue multiplier", "Margin delta", "Narrative")
+    for col, label in enumerate(headers, start=1):
+        ws.cell(row=5, column=col, value=label).style = "BrandDocsHeader"
+    rows = [
+        ("Base", 1.00, 0.000, "Plan case"),
+        ("Upside", 1.12, 0.025, "Faster adoption"),
+        ("Downside", 0.91, -0.035, "Cost pressure"),
+    ]
+    for r, row in enumerate(rows, start=6):
+        for c, val in enumerate(row, start=1):
+            cell = ws.cell(row=r, column=c, value=val)
+            if c in (2, 3):
+                cell.style = "BrandDocsPercent" if c == 3 else "BrandDocsInput"
+                cell.number_format = "0.0%" if c == 3 else "0.00x"
+    ws["A10"] = "Scenario revenue"
+    ws["B10"] = '=Summary!B4*INDEX(B6:B8,MATCH($B$3,A6:A8,0))'
+    ws["B10"].number_format = "#,##0"
+    ws["A11"] = "Scenario margin"
+    ws["B11"] = '=Summary!B8+INDEX(C6:C8,MATCH($B$3,A6:A8,0))'
+    ws["B11"].number_format = "0.0%"
+    table = Table(displayName="BrandDocsScenarioTbl", ref="A5:D8")
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+    ws.add_table(table)
+    for col, width in zip("ABCD", (18, 18, 16, 24)):
+        ws.column_dimensions[col].width = width
+    ws.print_area = "A1:D13"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 1
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
 def _build_data(wb: Workbook) -> None:
     """A raw transactions sheet (demo data the generator should clear/refill)."""
     ws = wb.create_sheet("Data")
@@ -388,6 +526,8 @@ def _add_named_ranges(wb: Workbook) -> None:
         "model_body": "'Model'!$A$4:$G$6",
         # A cross-sheet formula OUTPUT cell (single-cell named output slot).
         "headline_kpi": "'Summary'!$B$9",
+        "dashboard_kpis": "'Dashboard'!$A$4:$H$5",
+        "scenario_block": "'Scenarios'!$A$5:$D$8",
         # The raw demo-data block.
         "data_block": "'Data'!$A$2:$D$4",
     }
@@ -399,20 +539,18 @@ _LOGO_CACHE: Path | None = None
 
 
 def _logo_path() -> Path:
-    """Materialize the shared BrandDocs brand mark to a temp file openpyxl can
+    """Materialize the shared BrandDocs wordmark to a temp file openpyxl can
     embed.
 
-    Uses ``branddocs_mark_png`` so the cover logo is the SAME navy rounded-square
-    glyph as ``assets/hero.svg`` (blue stroke, filled blue header bar, outlined
-    blue field below). The PNG is square, so the cover drawing is sized square to
-    avoid distorting it.
+    Uses ``branddocs_mark_png`` so the cover logo is the SAME generated
+    text-only wordmark used by the DOCX and PPTX examples.
     """
     global _LOGO_CACHE
     if _LOGO_CACHE is None:
         import tempfile
 
-        tmp = Path(tempfile.gettempdir()) / "branddocs_template_logo.png"
-        tmp.write_bytes(branddocs_mark_png(256))
+        tmp = Path(tempfile.gettempdir()) / "branddocs_template_wordmark.png"
+        tmp.write_bytes(branddocs_mark_png(640, 160))
         _LOGO_CACHE = tmp
     return _LOGO_CACHE
 
@@ -426,6 +564,8 @@ def build(out: Path = OUT) -> Path:
     _build_inputs(wb)
     _build_model(wb)
     _build_summary(wb)
+    _build_dashboard(wb)
+    _build_scenarios(wb)
     _build_data(wb)
     _add_named_ranges(wb)
     # Workbook-level: request a full recalc so authored formulas evaluate on open.

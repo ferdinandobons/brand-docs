@@ -69,16 +69,14 @@ def freeze_ooxml(path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Brand imagery (deterministic, stdlib-only, supersampled RGBA -> PNG).
+# Brand imagery (deterministic, generated in-process).
 #
-# ``branddocs_mark_png`` mirrors the brand glyph in ``assets/hero.svg`` (the
-# "Brand Profile" card): a navy rounded-square tile with a blue stroke, a filled
-# blue header bar and an outlined blue field below it. Every example template
-# embeds the SAME mark so the committed binaries match the project hero. Pixels
-# are computed from fixed coordinates (4x supersample + alpha-weighted box
-# downsample for clean edges); no randomness, no wall-clock, no asset on disk.
+# ``branddocs_mark_png`` is intentionally a simple wordmark: the brand name
+# rendered as text, with no icon, badge, or decorative glyph. Every example
+# template embeds the SAME generated PNG so the committed binaries stay synthetic
+# and reproducible without shipping a proprietary asset.
 # ---------------------------------------------------------------------------
-# Palette echoing assets/hero.svg (navy field, blue accent, amber, light).
+# BrandDocs synthetic palette (navy, blue, amber, light).
 _NAVY = (0x16, 0x21, 0x3F, 255)
 _BLUE = (0x2B, 0x7C, 0xD3, 255)
 _AMBER = (0xE0, 0x74, 0x2B, 255)
@@ -175,32 +173,52 @@ def _disc(buf, W, H, cx, cy, rad, color):
                 buf[i], buf[i + 1], buf[i + 2], buf[i + 3] = color
 
 
-def branddocs_mark_png(size: int = 256) -> bytes:
-    """The BrandDocs brand mark (the hero.svg 'Brand Profile' card glyph).
+def branddocs_mark_png(width: int = 640, height: int = 160) -> bytes:
+    """Return a transparent BrandDocs wordmark PNG.
 
-    A navy rounded-square tile, blue stroke, a filled blue header bar and an
-    outlined blue field below - rendered to a transparent ``size``x``size`` PNG.
+    The logo is simply the brand name: ``Brand`` in navy and ``Docs`` in blue.
+    Pillow's embedded default scalable font keeps this deterministic and avoids
+    depending on platform fonts.
     """
-    W = H = size * _SS
-    buf = bytearray(W * H * 4)  # transparent
-    m = max(1, W // 64)
-    u = (W - 2 * m) / 34.0  # hero.svg tile is a 34-unit square
+    from PIL import Image, ImageDraw, ImageFont
 
-    def S(v):  # map an svg tile coordinate to a hi-res pixel
-        return int(round(m + v * u))
+    scale = 4
+    W, H = width * scale, height * scale
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    target_w = int(W * 0.9)
+    target_h = int(H * 0.66)
+    size = max(12, int(H * 0.58))
+    stroke = 1
+    font = ImageFont.load_default(size=size)
+    bbox = draw.textbbox((0, 0), "BrandDocs", font=font, stroke_width=stroke)
+    while size > 12 and (
+        bbox[2] - bbox[0] > target_w or bbox[3] - bbox[1] > target_h
+    ):
+        size -= 4
+        stroke = max(1, size // 48)
+        font = ImageFont.load_default(size=size)
+        bbox = draw.textbbox((0, 0), "BrandDocs", font=font, stroke_width=stroke)
 
-    r = int(round(6 * u))
-    t = max(_SS, int(round(2 * u)))
-    # 1) navy card + 2) blue stroke (the tile).
-    _fill_round(buf, W, m, m, W - m, H - m, r, _NAVY)
-    _stroke_round(buf, W, m, m, W - m, H - m, r, t, _BLUE)
-    # 3) filled blue header bar (svg 8,3 .. 26,13).
-    _fill_round(buf, W, S(8), S(3), S(26), S(13), int(round(2 * u)), _BLUE)
-    # 4) outlined blue field below (svg 8,19 .. 26,31).
-    _stroke_round(buf, W, S(8), S(19), S(26), S(31), int(round(2 * u)),
-                  max(_SS, int(round(1.6 * u))), _BLUE)
-    rgba, ow, oh = _downsample(buf, W, H, _SS)
-    return _png_bytes(rgba, ow, oh)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+    x = (W - text_w) // 2 - bbox[0]
+    y = (H - text_h) // 2 - bbox[1]
+    brand_advance = int(round(draw.textlength("Brand", font=font)))
+    draw.text((x, y), "Brand", font=font, fill=_NAVY, stroke_width=stroke, stroke_fill=_NAVY)
+    draw.text(
+        (x + brand_advance, y),
+        "Docs",
+        font=font,
+        fill=_BLUE,
+        stroke_width=stroke,
+        stroke_fill=_BLUE,
+    )
+    if scale != 1:
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+    out = io.BytesIO()
+    img.save(out, format="PNG", compress_level=9)
+    return out.getvalue()
 
 
 def branddocs_curve_png(width: int = 480, height: int = 200) -> bytes:

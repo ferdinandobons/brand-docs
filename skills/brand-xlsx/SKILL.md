@@ -101,13 +101,11 @@ Skip this verb when `comprehension.status` is `present` **and** its
 `source_shell_sha256` equals the live `provenance.shell.sha256`. Never re-run it
 at generate time.
 
-> **xlsx readiness.** The Excel extractor does not yet surface cover-anchor or
-> derived-index inventories, so those questions have no ids to bind to and
-> `comprehension.status` stays `absent` — `generate` runs the deterministic path.
-> Do not force a cover or index shape onto an empty inventory; a ref into an empty
-> inventory is fail-closed and will be rejected. Deeper xlsx comprehension (region
-> geometry, demo classification keyed to named regions) lands on the xlsx
-> fact-enrichment milestone.
+> **xlsx readiness.** The Excel extractor surfaces named-region cover anchors and
+> sample-data regions, while `fields` is intentionally empty because workbooks do
+> not have a TOC-style derived index. A current comprehension can therefore steer
+> cover fills/clears and demo-region cleanup, but it must not invent an index ref;
+> a ref into the empty field inventory is fail-closed and will be rejected.
 
 ## Internal Verify
 
@@ -139,7 +137,8 @@ the Python engine never calls a model. To run the full two-stage audit:
 
 1. Generate with `--qa deep`. The engine renders each printed page to a PNG, runs
    the L1 proxies, and writes `visual_manifest.json` next to the output in an
-   `<output>.visual/` dir (a side artifact; the `.xlsx` bytes never change).
+   `<output-file>.visual/` dir, such as `workbook.xlsx.visual/` (a side artifact;
+   the `.xlsx` bytes never change).
 2. Read the manifest path from stdout (`visual manifest: <path>`).
 3. Open the PNGs listed in `pages[*].png`. For every entry in `checklist`, judge
    PASS/FAIL against the rendered pages, taking `l1_findings` into account.
@@ -163,9 +162,9 @@ the final workbook. After every repair, regenerate and rerun `--qa deep`.
 
 M2 fills named cells and named regions while preserving formulas and workbook
 topology in the shell. Region fills that exceed the named range are refused
-before saving. Cover/index comprehension is staged behind the xlsx
-fact-enrichment milestone; until then comprehension stays `absent` and generation
-uses the proven deterministic path.
+before saving. When a current comprehension block is present, generation can
+clear corroborated cover/demo regions while preserving formulas; derived indexes
+remain out of scope for XLSX because the field inventory is intentionally empty.
 
 The two-stage visual audit closes the "L0-only" gap: L1 deterministic pixel
 proxies catch rendered-layout defects L0 cannot see (blank/broken printed pages,

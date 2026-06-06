@@ -167,8 +167,10 @@ class TocSdtCollisionTest(unittest.TestCase):
             )
             # The user's title was NOT dumped into the TOC SDT.
             self.assertNotIn("USER COVER TITLE 9Z", _ptext(toc_sdt))
-            # The TOC SDT's cached text + field survived (not blanked).
-            self.assertIn("Esempio di titolo cached entry", _ptext(toc_sdt))
+            # The TOC SDT's field survived, and its visible cache now reflects
+            # generated headings instead of stale template entries.
+            self.assertIn("Section", _ptext(toc_sdt))
+            self.assertNotIn("Esempio di titolo cached entry", _ptext(toc_sdt))
             self.assertTrue(
                 any((d.text or "").strip().startswith("TOC") for d in toc_sdt.iter(w("instrText")))
             )

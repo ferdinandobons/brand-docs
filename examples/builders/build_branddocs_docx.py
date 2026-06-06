@@ -19,6 +19,7 @@ Components authored (each is a real OOXML structure, not a text approximation):
     * a SUBTITLE / description placeholder paragraph;
     * a DOCUMENT-ID placeholder paragraph ("Document ID: {{doc_id}}");
     * a DATE placeholder paragraph ("{{date}}").
+    * a compact executive scorecard table with three synthetic KPI tiles.
 
   INDEX FRONT MATTER (three real complex fields, each with cached demo entries):
     * an outline Table of Contents  ``TOC \\o "1-3" \\h \\z \\u``;
@@ -33,17 +34,19 @@ Components authored (each is a real OOXML structure, not a text approximation):
     * a 2-level BULLET list  -> styles "BrandDocs Bullet L1" / "BrandDocs Bullet L2";
     * a 1-level NUMBERED list -> style "BrandDocs Number L1".
 
-  TABLE: a custom ``w:type="table"`` style "BrandDocs Table" (header-row shading +
-    row banding via ``w:tblStylePr`` conditional formatting) applied to a sample
-    table, with a real ``SEQ Table`` caption ("Table 1. ...").
+  TABLES: a custom ``w:type="table"`` style "BrandDocs Table" (header-row
+    shading + row banding via ``w:tblStylePr`` conditional formatting) applied to
+    a sample revenue table, an executive scorecard, a risk/readiness matrix, and
+    a landscape rollout matrix, with real ``SEQ Table`` captions on body tables.
 
   FIGURE: two real inline PNG figures, each with a ``SEQ Figure`` caption -
-    Figure 1 is the shared square brand mark (the hero.svg glyph, image1.png) and
-    Figure 2 is a real rising growth curve (image2.png, a distinct media part).
+    Figure 1 is the shared text-only BrandDocs wordmark (image1.png) and Figure 2
+    is a real rising growth curve (image2.png, a distinct media part).
 
   CALLOUT: a paragraph style "BrandDocs Callout" with shading + a box border.
+  QUOTE: a paragraph style "BrandDocs Quote" with a navy/amber editorial treatment.
 
-  HEADER / FOOTER: the shared BrandDocs brand mark in the default header, and a
+  HEADER / FOOTER: the shared BrandDocs wordmark in the default header, and a
     ``PAGE`` field in the default footer.
 
   SECTIONS: a PORTRAIT first section and a LANDSCAPE second section (distinct
@@ -312,6 +315,9 @@ def _build_styles(doc):
     _add_paragraph_style(styles, "BrandDocsCallout", "BrandDocs Callout",
                          color=BRAND_NAVY, shading=BRAND_LIGHT, box_border=BRAND_TEAL,
                          left_accent=BRAND_AMBER)
+    _add_paragraph_style(styles, "BrandDocsQuote", "BrandDocs Quote",
+                         color=BRAND_NAVY, shading=BRAND_BAND, box_border=BRAND_NAVY,
+                         left_accent=BRAND_AMBER, size_pt=12)
     # List styles -> reference w:num 1 (bullet L1), 2 (bullet L2), 3 (number L1).
     # BUG-LIST-ILVL: the L2 bullet pins w:ilvl=1 so it binds to level 1 of
     # abstractNum 0 (a distinct ``list.bullet.2`` role, not a dedup of L1).
@@ -515,6 +521,25 @@ def _build_cover(doc):
         sdt.addnext(p)
 
 
+def _build_cover_scorecard(doc):
+    """A compact executive scorecard in the front matter.
+
+    It is a table, not a paragraph, so it enriches the rendered cover without
+    creating extra paragraph cover anchors. This gives the example a realistic
+    corporate cover surface while keeping the cover-slot ids stable.
+    """
+    table = doc.add_table(rows=2, cols=3)
+    table.style = "BrandDocs Table"
+    _set_col_widths(table, (2160, 2160, 2160))
+    labels = ("Brand health", "Template coverage", "Audit posture")
+    values = ("92", "3 formats", "Deep QA")
+    for cell, label in zip(table.rows[0].cells, labels):
+        cell.text = label
+    for cell, value in zip(table.rows[1].cells, values):
+        cell.text = value
+    doc.add_paragraph("")
+
+
 # ---------------------------------------------------------------------------
 # INDEX FRONT MATTER - three real complex fields with cached demo entries.
 # ---------------------------------------------------------------------------
@@ -586,7 +611,8 @@ def _build_index_front_matter(doc):
         # Cached entries mirror the two real SEQ Table captions in the body and
         # the landscape appendix (does NOT change the fields count).
         _toc_entry(d, "Table 1. BrandDocs FY2026 quarterly revenue", 5, style="TableofFigures")
-        _toc_entry(d, "Table 2. BrandDocs program rollout matrix", 7, style="TableofFigures")
+        _toc_entry(d, "Table 2. BrandDocs risk and readiness matrix", 6, style="TableofFigures")
+        _toc_entry(d, "Table 3. BrandDocs program rollout matrix", 7, style="TableofFigures")
 
     _complex_field(doc, 'TOC \\h \\z \\c "Table" ', _tot_entries)
 
@@ -594,7 +620,7 @@ def _build_index_front_matter(doc):
     _toc_heading(doc, "Table of Figures")
 
     def _tof_entries(d):
-        _toc_entry(d, "Figure 1. BrandDocs Corp logo mark", 2, style="TableofFigures")
+        _toc_entry(d, "Figure 1. BrandDocs Corp wordmark", 2, style="TableofFigures")
         _toc_entry(d, "Figure 2. BrandDocs growth curve", 6, style="TableofFigures")
 
     _complex_field(doc, 'TOC \\h \\z \\c "Figure" ', _tof_entries)
@@ -664,12 +690,12 @@ def _build_table(doc):
 
 
 def _build_figure(doc, logo_rid, logo_cx, logo_cy):
-    _p(doc, "BrandDocs brand mark", "Heading2")
+    _p(doc, "BrandDocs wordmark", "Heading2")
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run()
     run._r.append(_inline_drawing(logo_rid, logo_cx, logo_cy, "BrandDocsLogoFigure", 100))
-    _seq_caption(doc, "Figure", "Figure", "BrandDocs Corp logo mark (synthetic).")
+    _seq_caption(doc, "Figure", "Figure", "BrandDocs Corp wordmark (synthetic).")
 
 
 def _build_callout(doc):
@@ -681,6 +707,44 @@ def _build_callout(doc):
         "are illustrative.",
         "BrandDocsCallout",
     )
+
+
+def _build_editorial_quote(doc):
+    _p(
+        doc,
+        "Design rule: preserve proven structure only while it improves the final "
+        "artifact. If visual QA shows blank space, stale content, or broken flow, "
+        "repair the composition rather than copying the template blindly.",
+        "BrandDocsQuote",
+    )
+
+
+def _build_risk_matrix(doc):
+    _p(doc, "Readiness and risk matrix", "Heading2")
+    doc.add_paragraph(
+        "The matrix below gives the template a realistic governance surface: it "
+        "mixes status, owner, signal, and mitigation text in a branded table."
+    )
+    table = doc.add_table(rows=5, cols=4)
+    table.style = "BrandDocs Table"
+    tblPr = table._tbl.tblPr
+    _sub(tblPr, "tblLook", firstRow="1", lastRow="0", firstColumn="0",
+         lastColumn="0", noHBand="0", noVBand="1")
+    headers = ("Area", "Signal", "Owner", "Mitigation")
+    for c, label in zip(table.rows[0].cells, headers):
+        c.text = label
+    rows = [
+        ("Visual QA", "Renderer drift", "Platform", "Smoke-test DOCX/PPTX/XLSX"),
+        ("Comprehension", "Missing inventory", "Model Ops", "Fail closed on empty refs"),
+        ("Brand fidelity", "Style fallback", "Design", "Re-assert captured styles"),
+        ("Delivery", "Stale cache", "Engineering", "Refresh visible field results"),
+    ]
+    for r, row in enumerate(rows, start=1):
+        for c, val in zip(table.rows[r].cells, row):
+            c.text = val
+    _set_col_widths(table, (1980, 1980, 1800, 3600))
+    _seq_caption(doc, "Table", "Table",
+                 "BrandDocs risk and readiness matrix (synthetic).")
 
 
 def _build_footnote_paragraph(doc, footnote_id):
@@ -863,7 +927,7 @@ def _add_landscape_section(doc, curve_rid=None, fig_cx=0, fig_cy=0):
     # cached "Figure 2" in the Table of Figures corresponds to a rendered figure.
     # This is a DISTINCT media part (word/media/image2.png, the growth-curve PNG),
     # NOT a reuse of the logo - Figure 2 is a real rising growth curve, not the
-    # brand mark. The curve PNG is ~12:5, so the inline extent matches that aspect.
+    # wordmark. The curve PNG is ~12:5, so the inline extent matches that aspect.
     if curve_rid is not None:
         _p(doc, "BrandDocs growth curve", "Heading2")
         fp = doc.add_paragraph()
@@ -907,12 +971,12 @@ def build(out: Path = OUT) -> Path:
         f"{R}/footnotes",
     )
 
-    # 4) Shared brand-mark image (the hero.svg glyph): a SQUARE navy rounded tile
-    # with the blue stroke + filled/outlined blue bars. The SAME mark every
-    # BrandDocs template embeds (CR-LOGO-MARK). Related to the document part (for
-    # Figure 1) and to the header part (for the header logo) independently. A
-    # SECOND media part carries the real growth-curve figure (CR-FIG2-CURVE).
-    logo_blob = branddocs_mark_png(256)          # square brand mark (image1.png)
+    # 4) Shared logo image: a generated text-only BrandDocs wordmark. The SAME
+    # wordmark every BrandDocs template embeds (CR-LOGO-MARK). Related to the
+    # document part (for Figure 1) and to the header part (for the header logo)
+    # independently. A SECOND media part carries the real growth-curve figure
+    # (CR-FIG2-CURVE).
+    logo_blob = branddocs_mark_png(640, 160)     # wide wordmark (image1.png)
     curve_blob = branddocs_curve_png(480, 200)   # ~12:5 growth curve (image2.png)
     doc_logo_rid = _relate_image_to(doc.part, logo_blob)
     doc_curve_rid = _relate_image_to(doc.part, curve_blob, partname="media/image2.png")
@@ -921,18 +985,19 @@ def build(out: Path = OUT) -> Path:
     # fields, then the demo body. add_* appends in document order, so build the
     # front matter first, then the body.
     _build_cover(doc)
+    _build_cover_scorecard(doc)
     _build_index_front_matter(doc)
 
     # Body content (freeform; a generation clears this region).
     _build_lists(doc)
     _build_table(doc)
-    # Figure 1 (the brand mark) uses the document-part image relationship.
-    # BUG-FIG-ASPECT: the brand mark PNG is SQUARE, so the inline extent MUST be
-    # square too - ``noChangeAspect=1`` would otherwise distort a non-square box.
-    # 1097280 EMU = 1.2in on each side.
-    fig_cx, fig_cy = 1097280, 1097280
+    # Figure 1 (the wordmark) uses the document-part image relationship. Preserve
+    # its 4:1 aspect ratio so the text never stretches.
+    fig_cx, fig_cy = 2743200, 685800
     _build_figure(doc, doc_logo_rid, fig_cx, fig_cy)
     _build_callout(doc)
+    _build_editorial_quote(doc)
+    _build_risk_matrix(doc)
     _build_footnote_paragraph(doc, footnote_id=2)
     _build_demo_body(doc)
 
@@ -940,9 +1005,8 @@ def build(out: Path = OUT) -> Path:
     # relationship to the shared image part.
     section = doc.sections[0]
     header_logo_rid = _relate_image_to(section.header.part, logo_blob)
-    # Header logo is the SAME square brand mark, so its extent is square too:
-    # 360000 EMU on each side (~0.39in) - a compact header glyph, undistorted.
-    _build_header_footer(doc, header_logo_rid, 360000, 360000)
+    # Header logo is the SAME 4:1 wordmark, kept compact and undistorted.
+    _build_header_footer(doc, header_logo_rid, 914400, 228600)
 
     # 7) A second, landscape section after the portrait body. It carries a wide
     # rollout-matrix table and a real second figure (the cached "Figure 2"),

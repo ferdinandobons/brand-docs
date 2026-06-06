@@ -52,7 +52,8 @@ def run_qa(
         extra_findings: findings recorded elsewhere (e.g. by the generator's loud
             style lookup) to fold into this report.
         out_dir: where to write the visual side artifacts (PNGs + manifest). When
-            None a conventional ``<output>.visual`` dir next to ``target`` is used.
+            None a conventional ``<output-filename>.visual`` dir next to
+            ``target`` is used (for example ``out.docx.visual``).
             Only consulted on the ``auto``/``deep`` path with renderers present.
         visual: a pre-rendered ``(renderers_ok, png_paths)`` tuple injected by
             tests to drive the ``auto``/``deep`` path without ``soffice``. When
@@ -176,6 +177,7 @@ def _run_visual_audit(
                 renderers_ok=bool(png_paths),
                 out_dir=resolved_out,
                 degraded=True,
+                environment_status=vqa.last_renderer_status(),
             )
             findings.append(Finding(
                 "visual.manifest",
@@ -223,6 +225,7 @@ def _run_visual_audit(
             renderers_ok=manifest_renderers_ok,
             out_dir=resolved_out,
             degraded=bool(render_warnings) or not manifest_renderers_ok,
+            environment_status=vqa.last_renderer_status(),
         )
         findings.append(Finding(
             "visual.manifest",

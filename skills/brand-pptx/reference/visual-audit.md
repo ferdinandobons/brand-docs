@@ -14,9 +14,9 @@ The audit adds two stages that see what L0 cannot — the *rendered layout*:
   L1 findings). **You** open the PNGs, judge each checklist item PASS/FAIL, and
   drive a repair loop. The engine **never** calls a model.
 
-The PNGs and the manifest are **side artifacts** written to an `<output>.visual/`
-dir next to the output. The bytes of the generated document never change because
-of the audit.
+The PNGs and the manifest are **side artifacts** written to an
+`<output-file>.visual/` dir next to the output, such as `deck.pptx.visual/`.
+The bytes of the generated document never change because of the audit.
 
 ## When it runs (`--qa`)
 
@@ -32,7 +32,8 @@ Notes:
   code unchanged**. `auto` may create no `.visual` dir; `deep` writes a degraded
   `.visual/visual_manifest.json` so the orchestrator can still inspect what was
   skipped and which checklist items remain unproven.
-- The renderer is env-detected via `doctor.probe()["visual_qa"]`; run
+- The renderer is env-detected via `doctor.probe()["visual_qa"]`, which
+  smoke-tests the DOCX, PPTX, and XLSX render paths end to end; run
   `python scripts/brandkit/cli.py doctor` before starting the workflow and report
   missing/unusable dependencies before claiming a full visual audit.
 
@@ -74,6 +75,17 @@ Top-level fields:
   "l1_findings": [
     {"check": "visual.blank_page", "severity": "WARNING", "message": "...", "location": "page:2"}
   ],
+  "environment": {
+    "platform": "macOS-...",
+    "python": "3.x",
+    "visual_qa": true,
+    "degraded": false,
+    "renderers": {
+      "soffice": {"available": true, "path": "/path/to/soffice"},
+      "pdftoppm": {"available": true, "path": "/path/to/pdftoppm"}
+    },
+    "install_hints": []
+  },
   "checklist": [
     {"id": "regions_present", "what": "...", "derived_from": "structure.skeleton[*].region + order", "severity_hint": "WARNING"}
   ],

@@ -139,75 +139,129 @@ def _short_output(data) -> str:
 
 
 def _probe_visual_pipeline(paths: dict[str, str | None]) -> tuple[bool, str | None]:
-    """Smoke-test the actual DOCX -> PDF -> PNG render pipeline.
+    """Smoke-test the actual DOCX/PPTX/XLSX -> PDF -> PNG render pipeline.
 
     Version probes catch missing executables, but they do not prove LibreOffice can
-    run headless conversion in the current environment. This tiny render keeps
-    ``doctor`` aligned with what ``visual.render_to_pngs`` needs.
+    run headless conversion in the current environment. The visual audit supports
+    all three OOXML formats, so the doctor probe must prove the full render chain
+    for each one instead of treating DOCX success as a proxy for PPTX/XLSX.
     """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        documents, error = _create_visual_probe_documents(tmp)
+        if error:
+            return False, error
+
+        for document in documents:
+            suffix = document.suffix.lstrip(".")
+            ok, error = _probe_visual_document(
+                paths,
+                document,
+                pdf_dir=tmp / f"pdf-{suffix}",
+                png_dir=tmp / f"png-{suffix}",
+                lo_profile=tmp / f"lo-profile-{suffix}",
+            )
+            if not ok:
+                return False, f"{suffix} {error}"
+    return True, None
+
+
+def _create_visual_probe_documents(tmp: Path) -> tuple[list[Path], str | None]:
+    """Create one tiny valid OOXML document for every visual-audit format."""
     try:
         from docx import Document
     except Exception as exc:
-        return False, f"cannot create probe docx: {exc}"
+        return [], f"cannot create probe docx: {exc}"
+    try:
+        from pptx import Presentation
+    except Exception as exc:
+        return [], f"cannot create probe pptx: {exc}"
+    try:
+        from openpyxl import Workbook
+    except Exception as exc:
+        return [], f"cannot create probe xlsx: {exc}"
 
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
+    try:
         docx_path = tmp / "probe.docx"
-        pdf_dir = tmp / "pdf"
-        png_dir = tmp / "png"
-        lo_profile = tmp / "lo-profile"
-        pdf_dir.mkdir()
-        png_dir.mkdir()
         doc = Document()
         doc.add_paragraph("BrandDocs visual QA probe")
         doc.save(docx_path)
 
-        soffice_path = paths.get("soffice") or "soffice"
-        try:
-            soffice = subprocess.run(
-                _soffice_convert_cmd(soffice_path, docx_path, pdf_dir, lo_profile),
-                capture_output=True,
-                timeout=VISUAL_PIPELINE_TIMEOUT_S,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return False, f"soffice convert failed: {exc}"
-        if soffice.returncode != 0:
-            return False, "soffice convert failed: " + (
-                _short_output(soffice.stderr)
-                or _short_output(soffice.stdout)
-                or f"exit code {soffice.returncode}"
-            )
+        pptx_path = tmp / "probe.pptx"
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        if slide.shapes.title is not None:
+            slide.shapes.title.text = "BrandDocs visual QA probe"
+        prs.save(pptx_path)
 
-        pdfs = list(pdf_dir.glob("*.pdf"))
-        if not pdfs:
-            return False, "soffice convert produced no PDF"
+        xlsx_path = tmp / "probe.xlsx"
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"] = "BrandDocs visual QA probe"
+        wb.save(xlsx_path)
+    except Exception as exc:
+        return [], f"cannot create visual probe document: {exc}"
 
-        pdftoppm_path = paths.get("pdftoppm") or "pdftoppm"
-        try:
-            toppm = subprocess.run(
-                [
-                    pdftoppm_path,
-                    "-png",
-                    "-r",
-                    "50",
-                    str(pdfs[0]),
-                    str(png_dir / "page"),
-                ],
-                capture_output=True,
-                timeout=VISUAL_PIPELINE_TIMEOUT_S,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return False, f"pdftoppm failed: {exc}"
-        if toppm.returncode != 0:
-            return False, "pdftoppm failed: " + (
-                _short_output(toppm.stderr)
-                or _short_output(toppm.stdout)
-                or f"exit code {toppm.returncode}"
-            )
-        if not list(png_dir.glob("page-*.png")):
-            return False, "pdftoppm produced no PNG"
+    return [docx_path, pptx_path, xlsx_path], None
+
+
+def _probe_visual_document(
+    paths: dict[str, str | None],
+    document: Path,
+    *,
+    pdf_dir: Path,
+    png_dir: Path,
+    lo_profile: Path,
+) -> tuple[bool, str | None]:
+    pdf_dir.mkdir()
+    png_dir.mkdir()
+
+    soffice_path = paths.get("soffice") or "soffice"
+    try:
+        soffice = subprocess.run(
+            _soffice_convert_cmd(soffice_path, document, pdf_dir, lo_profile),
+            capture_output=True,
+            timeout=VISUAL_PIPELINE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"soffice convert failed: {exc}"
+    if soffice.returncode != 0:
+        return False, "soffice convert failed: " + (
+            _short_output(soffice.stderr)
+            or _short_output(soffice.stdout)
+            or f"exit code {soffice.returncode}"
+        )
+
+    pdfs = list(pdf_dir.glob("*.pdf"))
+    if not pdfs:
+        return False, "soffice convert produced no PDF"
+
+    pdftoppm_path = paths.get("pdftoppm") or "pdftoppm"
+    try:
+        toppm = subprocess.run(
+            [
+                pdftoppm_path,
+                "-png",
+                "-r",
+                "50",
+                str(pdfs[0]),
+                str(png_dir / "page"),
+            ],
+            capture_output=True,
+            timeout=VISUAL_PIPELINE_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"pdftoppm failed: {exc}"
+    if toppm.returncode != 0:
+        return False, "pdftoppm failed: " + (
+            _short_output(toppm.stderr)
+            or _short_output(toppm.stdout)
+            or f"exit code {toppm.returncode}"
+        )
+    if not list(png_dir.glob("page-*.png")):
+        return False, "pdftoppm produced no PNG"
     return True, None
 
 

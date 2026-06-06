@@ -100,12 +100,12 @@ Skip this verb when `comprehension.status` is `present` **and** its
 `source_shell_sha256` equals the live `provenance.shell.sha256`. Never re-run it
 at generate time.
 
-> **pptx readiness.** The PowerPoint extractor does not yet surface cover-anchor
-> or derived-index inventories, so those questions have no ids to bind to and
-> `comprehension.status` stays `absent` — `generate` runs the deterministic path.
-> Do not force a cover or index shape onto an empty inventory; a ref into an empty
-> inventory is fail-closed and will be rejected. Deeper pptx comprehension lands on
-> the pptx fact-enrichment milestone.
+> **pptx readiness.** The PowerPoint extractor surfaces cover anchors, the
+> agenda/section-list field inventory when present, and slide regions. A current
+> comprehension can therefore steer cover fill, demo-slide clearing, and
+> agenda/section-list regeneration. If a deck genuinely has no agenda/section
+> field, do not force one; a ref into an empty inventory is fail-closed and will be
+> rejected. Deeper native-object authoring remains a pptx enrichment milestone.
 
 ## Internal Verify
 
@@ -137,7 +137,8 @@ the Python engine never calls a model. To run the full two-stage audit:
 
 1. Generate with `--qa deep`. The engine renders each slide to a PNG, runs the L1
    proxies, and writes `visual_manifest.json` next to the output in an
-   `<output>.visual/` dir (a side artifact; the `.pptx` bytes never change).
+   `<output-file>.visual/` dir, such as `deck.pptx.visual/` (a side artifact;
+   the `.pptx` bytes never change).
 2. Read the manifest path from stdout (`visual manifest: <path>`).
 3. Open the PNGs listed in `pages[*].png`. For every entry in `checklist`, judge
    PASS/FAIL against the rendered pages, taking `l1_findings` into account.
@@ -161,10 +162,12 @@ After every repair, regenerate and rerun `--qa deep`.
 ## Current Guarantees and Limits
 
 M2 supports title/content deck generation from the saved shell. Long content is
-split across multiple content slides with a conservative capacity guard. Layout
-and placeholder extraction are intentionally basic and will be deepened on the
-pptx fact-enrichment milestone; until then comprehension stays `absent` and
-generation uses the proven deterministic path.
+split across multiple content slides with a conservative capacity guard. When a
+current comprehension block is present, generation reconciles the deck by keeping
+structural slides, filling cover placeholders in place, clearing corroborated
+demo slides, and regenerating the agenda/section list from the new headings.
+Native tables/charts are still guarded as component-survival warnings rather than
+fully authored by the PPTX writer.
 
 The two-stage visual audit closes the "L0-only" gap: L1 deterministic pixel
 proxies catch rendered-layout defects L0 cannot see (blank/broken slides, content

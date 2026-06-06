@@ -73,6 +73,13 @@ def _bottom_bleed(width: int = 850, height: int = 1100) -> Image.Image:
 # §7.1 L1 proxies on synthetic PNGs
 # ---------------------------------------------------------------------------
 class L1ProxyTest(unittest.TestCase):
+    def test_default_out_dir_keeps_extension_to_avoid_format_collisions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self.assertEqual(vqa.default_out_dir(base / "out.docx"), base / "out.docx.visual")
+            self.assertEqual(vqa.default_out_dir(base / "out.pptx"), base / "out.pptx.visual")
+            self.assertEqual(vqa.default_out_dir(base / "out.xlsx"), base / "out.xlsx.visual")
+
     def test_blank_page_flagged(self) -> None:
         findings = vqa.check_blank_page(_blank(), page_index=0)
         self.assertEqual(len(findings), 1)
@@ -146,6 +153,22 @@ class L1ProxyTest(unittest.TestCase):
 
 
 class RendererAvailabilityTest(unittest.TestCase):
+    def test_renderers_available_caches_doctor_status(self) -> None:
+        orig_probe = doctor.probe
+        try:
+            doctor.probe = lambda: {
+                "python_deps": {},
+                "binaries": {"soffice": True, "pdftoppm": True},
+                "binary_paths": {"soffice": "/fake/soffice", "pdftoppm": "/fake/pdftoppm"},
+                "binary_errors": {},
+                "visual_qa": True,
+            }
+
+            self.assertTrue(vqa.renderers_available())
+            self.assertEqual(vqa.last_renderer_status()["binary_paths"]["soffice"], "/fake/soffice")
+        finally:
+            doctor.probe = orig_probe
+
     def test_doctor_prints_install_hints_for_missing_dependencies(self) -> None:
         orig_probe = doctor.probe
         try:
@@ -274,6 +297,40 @@ class RendererAvailabilityTest(unittest.TestCase):
         self.assertFalse(status["visual_qa"])
         self.assertIn("timed out", status["binary_errors"]["visual_qa"])
 
+    def test_conversion_probe_smoke_tests_docx_pptx_and_xlsx(self) -> None:
+        orig_run = subprocess.run
+        converted_suffixes: list[str] = []
+        rasterized_pdfs: list[str] = []
+
+        def fake_run(args, *unused_args, **unused_kwargs):
+            if "--convert-to" in args:
+                document = Path(args[-1])
+                converted_suffixes.append(document.suffix)
+                outdir = Path(args[args.index("--outdir") + 1])
+                outdir.mkdir(parents=True, exist_ok=True)
+                (outdir / f"{document.stem}.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            if args and Path(args[0]).name == "pdftoppm":
+                pdf = Path(args[-2])
+                rasterized_pdfs.append(pdf.stem)
+                prefix = Path(args[-1])
+                prefix.parent.mkdir(parents=True, exist_ok=True)
+                _centered_content().save(prefix.with_name(prefix.name + "-1.png"))
+                return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            return SimpleNamespace(returncode=0, stdout=b"version ok", stderr=b"")
+
+        subprocess.run = fake_run
+        try:
+            ok, error = doctor._probe_visual_pipeline(
+                {"soffice": "/fake/soffice", "pdftoppm": "/fake/pdftoppm"}
+            )
+        finally:
+            subprocess.run = orig_run
+
+        self.assertTrue(ok, error)
+        self.assertEqual({".docx", ".pptx", ".xlsx"}, set(converted_suffixes))
+        self.assertEqual(3, len(rasterized_pdfs))
+
 
 # ---------------------------------------------------------------------------
 # §7.2 Manifest + checklist (model-free)
@@ -304,6 +361,12 @@ class ManifestTest(unittest.TestCase):
             manifest_path = vqa.build_visual_manifest(
                 profile=profile, document=td / "out.docx", png_paths=png_paths,
                 l1_findings=l1, renderers_ok=True, out_dir=out_dir,
+                environment_status={
+                    "visual_qa": True,
+                    "binary_paths": {"soffice": "/usr/bin/soffice", "pdftoppm": "/usr/bin/pdftoppm"},
+                    "binaries": {"soffice": True, "pdftoppm": True},
+                    "binary_errors": {},
+                },
             )
             self.assertTrue(manifest_path.is_file())
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -317,6 +380,10 @@ class ManifestTest(unittest.TestCase):
             # Page records carry dimensions + orientation.
             self.assertEqual(data["pages"][0]["width"], 850)
             self.assertEqual(data["pages"][0]["orientation"], "portrait")
+            self.assertEqual(data["environment"]["visual_qa"], True)
+            self.assertEqual(data["environment"]["renderers"]["soffice"]["path"], "/usr/bin/soffice")
+            self.assertEqual(data["environment"]["renderers"]["pdftoppm"]["available"], True)
+            self.assertIn("platform", data["environment"])
 
     def test_checklist_derives_from_profile(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -823,9 +890,98 @@ class RealRenderE2ETest(unittest.TestCase):
                 rc = main(["generate", "--name", "e2e", "--input", str(idoc),
                            "--output", str(out), "--scope", "project", "--qa", "deep"])
                 self.assertEqual(rc, 0)
-                visual_dir = out.parent / "out.visual"
+                visual_dir = out.parent / "out.docx.visual"
                 self.assertTrue((visual_dir / "visual_manifest.json").is_file())
                 self.assertTrue((visual_dir / "page-1.png").is_file())
+            finally:
+                os.chdir(old)
+
+    def test_deep_generate_pptx_writes_manifest_and_pngs(self) -> None:
+        from brandkit.cli import main
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            old = Path.cwd()
+            import os
+            os.chdir(td)
+            try:
+                template = (
+                    Path(__file__).resolve().parents[1]
+                    / "examples" / "templates" / "branddocs_template.pptx"
+                )
+                self.assertEqual(
+                    main(["extract", "--name", "deck", "--template", str(template),
+                          "--scope", "project"]),
+                    0,
+                )
+                idoc = td / "deck.json"
+                idoc.write_text(json.dumps({
+                    "cover": {"title": "Visual Audit Deck"},
+                    "blocks": [
+                        {"type": "heading", "level": 1, "text": "Market Context"},
+                        {"type": "paragraph", "text": "Rendered for the PPTX visual audit."},
+                    ],
+                }), encoding="utf-8")
+                out = td / "out.pptx"
+                rc = main(["generate", "--name", "deck", "--input", str(idoc),
+                           "--output", str(out), "--scope", "project", "--qa", "deep"])
+                self.assertEqual(rc, 0)
+                visual_dir = out.parent / "out.pptx.visual"
+                manifest = visual_dir / "visual_manifest.json"
+                self.assertTrue(manifest.is_file())
+                self.assertTrue((visual_dir / "page-1.png").is_file())
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                self.assertEqual(data["kind"], "pptx")
+                self.assertTrue(data["pages"])
+            finally:
+                os.chdir(old)
+
+    def test_deep_generate_xlsx_writes_manifest_and_pngs(self) -> None:
+        from brandkit.cli import main
+
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            old = Path.cwd()
+            import os
+            os.chdir(td)
+            try:
+                template = (
+                    Path(__file__).resolve().parents[1]
+                    / "examples" / "templates" / "branddocs_template.xlsx"
+                )
+                self.assertEqual(
+                    main(["extract", "--name", "book", "--template", str(template),
+                          "--scope", "project"]),
+                    0,
+                )
+                grid = td / "grid.json"
+                grid.write_text(json.dumps({
+                    "cells": {
+                        "report_title": "Visual Audit Workbook",
+                        "report_subtitle": "Excel render proof",
+                        "client_name": "BrandDocs",
+                        "period": "FY 2026",
+                        "headline_kpi": "On-brand",
+                    },
+                    "regions": {
+                        "data_block": [
+                            ["Metric", "Q1", "Q2", "Status"],
+                            ["Pipeline", 42, 48, "Healthy"],
+                            ["Delivery", 91, 94, "Green"],
+                        ],
+                    },
+                }), encoding="utf-8")
+                out = td / "out.xlsx"
+                rc = main(["generate", "--name", "book", "--input", str(grid),
+                           "--output", str(out), "--scope", "project", "--qa", "deep"])
+                self.assertEqual(rc, 0)
+                visual_dir = out.parent / "out.xlsx.visual"
+                manifest = visual_dir / "visual_manifest.json"
+                self.assertTrue(manifest.is_file())
+                self.assertTrue((visual_dir / "page-1.png").is_file())
+                data = json.loads(manifest.read_text(encoding="utf-8"))
+                self.assertEqual(data["kind"], "xlsx")
+                self.assertTrue(data["pages"])
             finally:
                 os.chdir(old)
 

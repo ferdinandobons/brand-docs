@@ -92,6 +92,10 @@ def generate(
     for block in idoc.blocks:
         _write_block(doc, profile, resolver, block, sink)
 
+    # Keep the visible TOC field cache aligned for renderers that do not update
+    # fields in headless export. The field itself remains dirty/updateable.
+    structure.refresh_visible_outline_toc_cache(doc, _outline_headings(idoc.blocks))
+
     # Refresh the preserved TOC (if any) so Word recomputes it on open - the new
     # headings written into the body will be picked up. No-op when there is no TOC.
     structure.refresh_toc(doc)
@@ -106,6 +110,16 @@ def generate(
     out.parent.mkdir(parents=True, exist_ok=True)
     doc.save(out)
     return out
+
+
+def _outline_headings(blocks: list) -> list[tuple[int, str]]:
+    headings: list[tuple[int, str]] = []
+    for block in blocks:
+        if isinstance(block, ir.Heading):
+            text = textutil.runs_to_text(block.runs).strip()
+            if text:
+                headings.append((block.level, text))
+    return headings
 
 
 def _content_has_captionables(idoc: ir.IntermediateDocument) -> bool:

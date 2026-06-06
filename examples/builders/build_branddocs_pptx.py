@@ -24,13 +24,15 @@ python-pptx (plus a little raw lxml) can author from the default template:
   * A NATIVE chart (``graphicFrame``/``c:chart``) via ``shapes.add_chart`` with
     a small clustered-bar dataset (the embedded chart workbook is part of the
     package, exercising the relationship/parts walker).
-  * A PICTURE: the shared, deterministic SQUARE BrandDocs brand mark PNG from
-    ``_brandlib.branddocs_mark_png`` (the ``assets/hero.svg`` "Brand Profile"
-    glyph: a navy rounded tile with a blue stroke, a filled blue header bar and
-    an outlined blue field below) - no external / proprietary asset on disk -
-    placed both as a free ``add_picture`` shape and as a "logo" mark on the
-    cover. The mark is SQUARE, so it is embedded with square EMU extents
-    (``width == height``) to keep ``noChangeAspect`` drawings undistorted.
+  * A KPI dashboard slide with four branded stat cards and a second NATIVE line
+    chart, so the example deck proves more than one chart family and more than
+    one data-display layout.
+  * A risk heatmap slide with a second NATIVE table whose body cells use semantic
+    brand fills (navy/teal/amber/light).
+  * A PICTURE: the shared, deterministic text-only BrandDocs wordmark PNG from
+    ``_brandlib.branddocs_mark_png`` - no external / proprietary asset on disk -
+    placed both as a free ``add_picture`` shape and as a cover logo. The
+    wordmark is embedded at a 4:1 aspect ratio to keep text undistorted.
   * A logo-like GROUPED-SHAPE mark + auto-shapes tinted with the synthetic BrandDocs
     theme colors (approximating SmartArt - see NOTE below).
   * Flat, borderless brand BANDS (``_add_band``) - pure decoration carrying no
@@ -154,6 +156,35 @@ def _add_band(slide, left, top, width, height, color):
     return r
 
 
+def _add_stat_card(slide, left, top, width, height, value, label, *, color, invert=False):
+    """Add a branded KPI card with value + label text."""
+    box = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
+    box.fill.solid()
+    box.fill.fore_color.rgb = color
+    box.line.fill.background()
+    box.shadow.inherit = False
+    tf = box.text_frame
+    tf.clear()
+    tf.margin_left = Emu(137160)
+    tf.margin_right = Emu(137160)
+    tf.margin_top = Emu(91440)
+    tf.margin_bottom = Emu(91440)
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    p = tf.paragraphs[0]
+    p.text = value
+    r = p.runs[0]
+    r.font.size = Pt(24)
+    r.font.bold = True
+    r.font.color.rgb = WHITE if invert else BRAND_NAVY
+    lp = tf.add_paragraph()
+    lp.text = label
+    lr = lp.runs[0]
+    lr.font.size = Pt(10.5)
+    lr.font.bold = True
+    lr.font.color.rgb = WHITE if invert else BRAND_SLATE
+    return box
+
+
 # ---------------------------------------------------------------------------
 # Slide builders. Each returns the created slide so build() can collect sldIds.
 # ---------------------------------------------------------------------------
@@ -171,13 +202,15 @@ def _add_cover(prs, png_path: Path):
     # only, no text -> classification unaffected). (P2)
     _add_band(slide, Emu(0), Emu(0), sw, Emu(228600), BRAND_NAVY)
     _add_band(slide, Emu(0), Emu(228600), sw, Emu(45720), BRAND_AMBER)
+    _add_band(slide, Emu(6629400), Emu(0), Emu(2514600), prs.slide_height, BRAND_NAVY)
+    _add_band(slide, Emu(6537960), Emu(0), Emu(91440), prs.slide_height, BRAND_AMBER)
     ph = {p.placeholder_format.idx: p for p in slide.placeholders}
     # Keep ALL 5 placeholders filled (cover_anchors >= 5); nudge the title/subtitle
     # up into a tidier stack below the header band. (P7)
     _set_text(ph[0], "BrandDocs Corp Quarterly Business Review", size=40, bold=True, color=BRAND_NAVY)
-    ph[0].top = Emu(2057400)
+    ph[0].left, ph[0].top, ph[0].width = Emu(182880), Emu(2057400), Emu(5943600)
     _set_text(ph[1], "FY2026 - Performance, Outlook & Initiatives", size=20, color=BRAND_TEAL)
-    ph[1].top = Emu(3429000)
+    ph[1].left, ph[1].top, ph[1].width = Emu(685800), Emu(3429000), Emu(5486400)
     if 10 in ph:  # DATE placeholder
         _set_text(ph[10], "January 15, 2026", size=12, color=BRAND_SLATE)
     if 11 in ph:  # FOOTER placeholder
@@ -186,12 +219,16 @@ def _add_cover(prs, png_path: Path):
         _set_text(ph[12], "1", size=12, color=BRAND_SLATE)
     # Thin amber rule under the title. (P7)
     _add_band(slide, Emu(685800), Emu(3200400), Emu(2286000), Emu(45720), BRAND_AMBER)
-    # Logo picture in the corner (the shared SQUARE BrandDocs brand mark). The
-    # mark from ``branddocs_mark_png`` is square, so pass EQUAL width/height to
-    # keep it undistorted (the <p:pic> carries noChangeAspect=1).
+    # Logo picture in the corner: the shared generated BrandDocs wordmark.
     slide.shapes.add_picture(
-        str(png_path), Emu(457200), Emu(457200), width=Emu(914400), height=Emu(914400)
+        str(png_path), Emu(365760), Emu(548640), width=Emu(1645920), height=Emu(411480)
     )
+    _add_stat_card(slide, Emu(6903720), Emu(1371600), Emu(1943100), Emu(823000),
+                   "18%", "YoY revenue growth", color=BRAND_TEAL, invert=True)
+    _add_stat_card(slide, Emu(6903720), Emu(2453640), Emu(1943100), Emu(823000),
+                   "92", "Brand health index", color=BRAND_LIGHT)
+    _add_stat_card(slide, Emu(6903720), Emu(3535680), Emu(1943100), Emu(823000),
+                   "3", "Office formats audited", color=BRAND_AMBER, invert=True)
     return slide
 
 
@@ -239,6 +276,66 @@ def _add_content_text(prs):
         ],
         size=18,
     )
+    return slide
+
+
+def _add_kpi_dashboard(prs):
+    """Board-style KPI dashboard: stat cards + native line chart."""
+    layout = prs.slide_layouts[LO_TITLE_ONLY]
+    slide = prs.slides.add_slide(layout)
+    ph = {p.placeholder_format.idx: p for p in slide.placeholders}
+    _set_text(ph[0], "Performance Snapshot", size=30, bold=True, color=BRAND_NAVY)
+
+    cards = [
+        ("$14.2M", "FY net revenue", BRAND_NAVY, True),
+        ("+230 bps", "Gross margin lift", BRAND_TEAL, True),
+        ("86%", "Workflow adoption", BRAND_LIGHT, False),
+        ("4", "Priority risks", BRAND_AMBER, True),
+    ]
+    left = Emu(457200)
+    for i, (value, label, color, invert) in enumerate(cards):
+        _add_stat_card(
+            slide,
+            Emu(int(left) + i * 2171700),
+            Emu(1371600),
+            Emu(1943100),
+            Emu(1005840),
+            value,
+            label,
+            color=color,
+            invert=invert,
+        )
+
+    chart_data = CategoryChartData()
+    chart_data.categories = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"]
+    chart_data.add_series("Brand health", (74, 78, 81, 84, 88, 92))
+    chart_data.add_series("Adoption", (61, 66, 70, 76, 81, 86))
+    gframe = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE_MARKERS,
+        Emu(685800), Emu(2926080), Emu(5486400), Emu(2743200),
+        chart_data,
+    )
+    chart = gframe.chart
+    chart.has_title = True
+    chart.chart_title.text_frame.text = "Health and adoption trend"
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+    for ser, col in zip(chart.plots[0].series, (BRAND_TEAL, BRAND_AMBER)):
+        ser.format.line.color.rgb = col
+        ser.format.line.width = Pt(2.25)
+    call = slide.shapes.add_textbox(Emu(6537960), Emu(3017520), Emu(2286000), Emu(2286000))
+    tf = call.text_frame
+    tf.word_wrap = True
+    tf.margin_left = Emu(137160)
+    p = tf.paragraphs[0]
+    p.text = "Primary signal"
+    p.runs[0].font.bold = True
+    p.runs[0].font.size = Pt(16)
+    p.runs[0].font.color.rgb = BRAND_NAVY
+    bp = tf.add_paragraph()
+    bp.text = "Outputs now carry visual proof artifacts, moving QA from spot-checking to repeatable evidence."
+    bp.runs[0].font.size = Pt(13)
+    bp.runs[0].font.color.rgb = BRAND_SLATE
     return slide
 
 
@@ -297,6 +394,47 @@ def _add_content_table(prs):
     return slide
 
 
+def _add_risk_heatmap(prs):
+    """Native table used as a compact risk/readiness heatmap."""
+    layout = prs.slide_layouts[LO_TITLE_ONLY]
+    slide = prs.slides.add_slide(layout)
+    ph = {p.placeholder_format.idx: p for p in slide.placeholders}
+    _set_text(ph[0], "Risk & Readiness Heatmap", size=28, bold=True, color=BRAND_NAVY)
+    rows, cols = 5, 4
+    gtable = slide.shapes.add_table(rows, cols, Emu(685800), Emu(1600200), Emu(7772400), Emu(3657600))
+    table = gtable.table
+    headers = ["Area", "Signal", "Readiness", "Action"]
+    body = [
+        ["Renderer", "Sandbox drift", "Amber", "Run doctor before deep QA"],
+        ["Template", "Stale field cache", "Teal", "Refresh generated indexes"],
+        ["Workbook", "Formula loss", "Navy", "Diff formulas shell vs output"],
+        ["Deck", "Native object loss", "Amber", "Review component warnings"],
+    ]
+    for c, label in enumerate(headers):
+        cell = table.cell(0, c)
+        cell.text = label
+        cell.fill.solid()
+        cell.fill.fore_color.rgb = BRAND_NAVY
+        run = cell.text_frame.paragraphs[0].runs[0]
+        run.font.bold = True
+        run.font.color.rgb = WHITE
+        run.font.size = Pt(13)
+    color_for = {"Amber": BRAND_AMBER, "Teal": BRAND_TEAL, "Navy": BRAND_NAVY}
+    for r, row in enumerate(body, start=1):
+        for c, val in enumerate(row):
+            cell = table.cell(r, c)
+            cell.text = val
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = BRAND_LIGHT
+            if c == 2:
+                cell.fill.fore_color.rgb = color_for[val]
+            run = cell.text_frame.paragraphs[0].runs[0]
+            run.font.size = Pt(12)
+            run.font.color.rgb = WHITE if c == 2 else BRAND_NAVY
+            run.font.bold = c == 2
+    return slide
+
+
 def _add_chart(prs):
     """Chart slide: title + a NATIVE clustered-bar chart (graphicFrame/c:chart)."""
     layout = prs.slide_layouts[LO_TITLE_ONLY]
@@ -343,49 +481,41 @@ def _add_picture_slide(prs, png_path: Path):
     layout = prs.slide_layouts[LO_PIC_CAPTION]
     slide = prs.slides.add_slide(layout)
     ph = {p.placeholder_format.idx: p for p in slide.placeholders}
-    # Fill the PICTURE placeholder (idx 1) with the shared SQUARE brand mark. The
-    # layout's PICTURE box is tall/portrait (W6.0/H4.5in) which would stretch the
-    # mark, so reshape it to a SQUARE box (width == height) so the mark - whose
-    # <p:pic> carries noChangeAspect=1 - stays undistorted. (P4)
+    # Fill the PICTURE placeholder (idx 1) with the shared text-only wordmark.
+    # The layout's picture box is much taller than a logo, so reshape the result
+    # to a wide 4:1 frame after insertion.
     if 1 in ph:
         try:
             pic = ph[1].insert_picture(str(png_path))
-            # Zero the crop python-pptx applies when fitting -> undistorted. (P4)
+            # Zero the crop python-pptx applies when fitting -> undistorted.
             pic.crop_left = pic.crop_right = pic.crop_top = pic.crop_bottom = 0
-            # Reshape the inserted picture to a SQUARE box. insert_picture emits a
-            # fresh <p:pic> WITHOUT an explicit xfrm (it inherits the layout's
-            # portrait geometry), so the square override must be applied to the
-            # returned picture AFTER insertion. Zeroing the crop only removes
-            # cropping; the picture still stretches to fill its ext box, so a
-            # SQUARE ext (2286000 x 2286000) keeps the square mark undistorted. (P4)
             pic.left, pic.top, pic.width, pic.height = (
-                Emu(3429000), Emu(914400), Emu(2286000), Emu(2286000))
+                Emu(1828800), Emu(1371600), Emu(4754880), Emu(1188720))
         except Exception:
             slide.shapes.add_picture(
-                str(png_path), Emu(3429000), Emu(914400),
-                width=Emu(2286000), height=Emu(2286000),
+                str(png_path), Emu(1828800), Emu(1371600),
+                width=Emu(4754880), height=Emu(1188720),
             )
     else:
         slide.shapes.add_picture(
-            str(png_path), Emu(3429000), Emu(914400),
-            width=Emu(2286000), height=Emu(2286000),
+            str(png_path), Emu(1828800), Emu(1371600),
+            width=Emu(4754880), height=Emu(1188720),
         )
     # Reposition the TITLE and caption BODY into a tidy stack below the picture
     # box (bottom ~3.5in). All three placeholders stay present/filled. (P12)
-    _set_text(ph[0], "The BrandDocs Brand Mark", size=28, bold=True, color=BRAND_NAVY)
+    _set_text(ph[0], "The BrandDocs Wordmark", size=28, bold=True, color=BRAND_NAVY)
     ph[0].top = Emu(3429000)
     if 2 in ph:
         ph[2].top = Emu(4114800)
         _bullets(
             ph[2],
-            [("A synthetic, generated mark - no proprietary asset.", 0),
-             ("Navy rounded tile, blue stroke, blue header bar, outlined field.", 0)],
+            [("A synthetic, generated logo - no proprietary asset.", 0),
+             ("The logo is simply the BrandDocs name, with no icon or badge.", 0)],
             size=16,
         )
-    # A second, free-floating copy via add_picture to exercise that path too;
-    # in the top-left corner. SQUARE extents (width == height) keep it undistorted. (P4)
+    # A second, free-floating copy via add_picture to exercise that path too.
     slide.shapes.add_picture(
-        str(png_path), Emu(457200), Emu(457200), width=Emu(457200), height=Emu(457200)
+        str(png_path), Emu(457200), Emu(548640), width=Emu(1371600), height=Emu(342900)
     )
     return slide
 
@@ -558,16 +688,16 @@ def _inject_sections(prs, sections) -> None:
 # ---------------------------------------------------------------------------
 def build(out: Path = OUT) -> Path:
     out = Path(out)
-    # The shared SQUARE BrandDocs brand mark (the assets/hero.svg glyph). Bytes
-    # are computed deterministically by _brandlib, so every example template
-    # embeds the SAME mark and re-runs stay byte-identical.
-    png_bytes = branddocs_mark_png(256)
+    # The shared text-only BrandDocs wordmark. Bytes are computed
+    # deterministically by _brandlib, so every example template embeds the SAME
+    # logo and re-runs stay byte-identical.
+    png_bytes = branddocs_mark_png(640, 160)
 
-    # Materialize the mark PNG to a temp file (python-pptx wants a path or a
+    # Materialize the wordmark PNG to a temp file (python-pptx wants a path or a
     # stream; we use a BytesIO-backed temp via NamedTemporaryFile-free path).
     import tempfile
 
-    tmp_png = Path(tempfile.gettempdir()) / "branddocs_template_mark.png"
+    tmp_png = Path(tempfile.gettempdir()) / "branddocs_template_wordmark.png"
     tmp_png.write_bytes(png_bytes)
 
     prs = Presentation()  # default template (master + 11 layouts + theme)
@@ -580,23 +710,25 @@ def build(out: Path = OUT) -> Path:
     s0 = _add_cover(prs, tmp_png)                 # 0 cover
     s1 = _add_agenda(prs, section_names)          # 1 agenda / section list
     s2 = _add_content_text(prs)                   # 2 content-text
-    s3 = _add_content_table(prs)                  # 3 content-table (native table)
-    s4 = _add_chart(prs)                          # 4 native chart
-    s5 = _add_picture_slide(prs, tmp_png)         # 5 picture
-    s6 = _add_smartart_approx(prs)                # 6 grouped-shape "SmartArt"
-    s7 = _add_demo_slide(prs)                     # 7 DEMO (prompt-only text)
-    s8 = _add_closing(prs)                        # 8 closing
-    _ = (s0, s2, s3, s4, s5, s6, s7, s8)
+    s3 = _add_kpi_dashboard(prs)                  # 3 KPI dashboard + native line chart
+    s4 = _add_content_table(prs)                  # 4 content-table (native table)
+    s5 = _add_chart(prs)                          # 5 native clustered-bar chart
+    s6 = _add_risk_heatmap(prs)                   # 6 native heatmap table
+    s7 = _add_picture_slide(prs, tmp_png)         # 7 picture
+    s8 = _add_smartart_approx(prs)                # 8 grouped-shape "SmartArt"
+    s9 = _add_demo_slide(prs)                     # 9 DEMO (prompt-only text)
+    s10 = _add_closing(prs)                       # 10 closing
+    _ = (s0, s2, s3, s4, s5, s6, s7, s8, s9, s10)
 
     # --- Inject the real PowerPoint section list (lxml). ----------------------
     # Section spans (0-based slide indices):
-    #   Overview   -> cover, agenda, exec-summary           (0,1,2)
-    #   Financials -> table, chart                          (3,4)
-    #   Closing    -> picture, smartart, demo, thank-you    (5,6,7,8)
+    #   Overview   -> cover, agenda, exec-summary, KPI dashboard (0,1,2,3)
+    #   Financials -> table, chart, heatmap                         (4,5,6)
+    #   Closing    -> picture, smartart, demo, thank-you            (7,8,9,10)
     sections = [
-        ("Overview", [0, 1, 2]),
-        ("Financials", [3, 4]),
-        ("Closing", [5, 6, 7, 8]),
+        ("Overview", [0, 1, 2, 3]),
+        ("Financials", [4, 5, 6]),
+        ("Closing", [7, 8, 9, 10]),
     ]
     _inject_sections(prs, sections)
 

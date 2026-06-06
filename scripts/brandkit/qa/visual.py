@@ -35,6 +35,7 @@ Design constraints (deliberate):
 from __future__ import annotations
 
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -76,6 +77,7 @@ MANIFEST_FILENAME: str = "visual_manifest.json"
 MANIFEST_SCHEMA_VERSION: str = "visual-manifest-1"
 
 _PAGE_RE = re.compile(r"page-(\d+)\.png$")
+_LAST_RENDERER_STATUS: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +89,14 @@ def renderers_available() -> bool:
     Delegates to :func:`brandkit.doctor.probe` so there is a single source of
     truth for renderer detection (the same flag ``doctor`` reports).
     """
-    return bool(doctor.probe().get("visual_qa"))
+    global _LAST_RENDERER_STATUS
+    _LAST_RENDERER_STATUS = doctor.probe()
+    return bool(_LAST_RENDERER_STATUS.get("visual_qa"))
+
+
+def last_renderer_status() -> dict | None:
+    """Return the last ``doctor.probe()`` result captured by renderer probing."""
+    return _LAST_RENDERER_STATUS
 
 
 def _page_sort_key(p: Path) -> int:
@@ -624,6 +633,7 @@ def build_visual_manifest(
     renderers_ok: bool,
     out_dir: str | Path,
     degraded: bool | None = None,
+    environment_status: dict | None = None,
 ) -> Path:
     """Build and write ``<out_dir>/visual_manifest.json`` (a SIDE artifact).
 
@@ -655,6 +665,9 @@ def build_visual_manifest(
                 "orientation": _orientation(w, h),
             })
 
+    if degraded is None:
+        degraded = not renderers_ok
+
     manifest: dict = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "kind": profile.get("kind"),
@@ -674,6 +687,11 @@ def build_visual_manifest(
             for f in (l1_findings if renderers_ok else [])
         ],
         "checklist": derive_visual_checklist(profile),
+        "environment": visual_environment_summary(
+            environment_status,
+            renderers_ok=bool(renderers_ok),
+            degraded=degraded,
+        ),
         "instructions": (
             "Open each PNG. For each checklist item, judge PASS/FAIL against the "
             "rendered pages, taking l1_findings into account. If any item FAILS, "
@@ -682,8 +700,6 @@ def build_visual_manifest(
             "yours."
         ),
     }
-    if degraded is None:
-        degraded = not renderers_ok
     if degraded:
         manifest["degraded"] = True
 
@@ -695,13 +711,47 @@ def build_visual_manifest(
     return path
 
 
+def visual_environment_summary(
+    status: dict | None = None,
+    *,
+    renderers_ok: bool | None = None,
+    degraded: bool | None = None,
+) -> dict:
+    """Return portable environment diagnostics for the visual manifest."""
+    status = status or {}
+    binary_paths = status.get("binary_paths") or {}
+    binaries = status.get("binaries") or {}
+    binary_errors = status.get("binary_errors") or {}
+    renderers = {}
+    for name in doctor.OPTIONAL_BINARIES:
+        path = binary_paths.get(name) or shutil.which(name)
+        renderers[name] = {
+            "available": bool(binaries.get(name, bool(path))),
+            "path": path,
+        }
+        if binary_errors.get(name):
+            renderers[name]["error"] = binary_errors[name]
+
+    hints = doctor.install_hints(status) if status else []
+    return {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "visual_qa": bool(status.get("visual_qa", renderers_ok)),
+        "degraded": bool(degraded),
+        "renderers": renderers,
+        "install_hints": hints,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Default side-artifact location helper (used by run_qa / cli when none given)
 # ---------------------------------------------------------------------------
 def default_out_dir(target: str | Path) -> Path:
     """Return the conventional side-artifact dir next to ``target`` (never inside).
 
-    ``<parent>/<stem>.visual`` -- e.g. ``out.docx`` -> ``out.visual``.
+    ``<parent>/<filename>.visual`` -- e.g. ``out.docx`` -> ``out.docx.visual``.
+    Keeping the extension prevents side-artifact collisions when different Office
+    formats share the same basename in the same directory.
     """
     p = Path(target)
-    return p.parent / (p.stem + ".visual")
+    return p.parent / (p.name + ".visual")

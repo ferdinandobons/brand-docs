@@ -76,10 +76,9 @@ def surface_inventories(profile: dict) -> dict:
         }
 
     ``cover_anchors`` / ``fields`` / ``regions`` are read from
-    ``surface.<kind>.{cover_anchors,fields,regions}`` when the extractor has
-    enriched them (docx after M-i-3; pptx/xlsx may leave them empty until their
-    own fact-enrichment milestone, which is legal - the refs into them simply
-    have nothing to bind to and a destructive ref is fail-closed at QA time).
+    ``surface.<kind>.{cover_anchors,fields,regions}``. Empty inventories are
+    legal (for example XLSX has no TOC-style field code), but refs into an empty
+    inventory have nothing to bind to and are fail-closed at QA time.
     ``roles`` is the concrete role-id list (``_index`` order if present).
 
     This is the ONLY place the inventory shape is defined; the ``comprehend-input``

@@ -142,13 +142,11 @@ each `<...>` with a verbatim id from your own bundle.
 
 ## Format readiness
 
-Comprehension binds only to the ids a format's extractor actually surfaces. The
-Word extractor grounds all four questions: it surfaces cover anchors,
-derived-index fields, and regions, so cover slots and index conventions have ids
-to bind to. The PowerPoint and Excel extractors surface their inventories on
-their own fact-enrichment milestones; until then those inventories are legally
-empty, the model writes only the parts it has ids for (commonly just
-`demo_classification` or nothing), and `comprehension.status` stays `absent` so
-`generate` runs the proven deterministic path. Never force a cover or index shape
-onto a format whose inventory does not yet surface one — a ref into an empty
-inventory is fail-closed and will be rejected.
+Comprehension binds only to the ids a format's extractor actually surfaces. All
+three Office extractors expose cover anchors and regions when the template
+contains them. Derived-index fields are format-specific: DOCX can expose TOC/list
+fields, PPTX can expose an agenda/section-list field when present, and XLSX keeps
+`fields` intentionally empty because workbooks have no TOC-style field code. The
+model writes only the parts it has ids for; never force a cover, index, or region
+shape onto an empty inventory — a ref into an empty inventory is fail-closed and
+will be rejected.

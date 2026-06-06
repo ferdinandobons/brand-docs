@@ -28,8 +28,11 @@ language.
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import Optional
+
+from docx.oxml import OxmlElement
 
 # ---------------------------------------------------------------------------
 # OOXML namespaces. python-docx registers ``w`` but the literal URI is kept here
@@ -1035,3 +1038,138 @@ def refresh_toc(doc) -> int:
                     begin.set(w("dirty"), "true")
                     marked += 1
     return marked
+
+
+def refresh_visible_outline_toc_cache(doc, headings: list[tuple[int, str]]) -> int:
+    """Rewrite the visible cache of outline TOC fields from generated headings.
+
+    Word/LibreOffice store a field *result* alongside the TOC field code. Marking
+    the field dirty is enough for Word-on-open, but headless LibreOffice often
+    renders the stale cached result when exporting to PDF. This function keeps the
+    outline TOC field updateable while replacing the visible cache with the
+    generated document's current headings, so visual audit does not show template
+    sample entries.
+    """
+    clean_headings = [
+        (max(1, int(level or 1)), str(text).strip())
+        for level, text in headings
+        if str(text).strip()
+    ]
+    if not clean_headings:
+        return 0
+
+    rewritten = 0
+    for child in list(doc.element.body):
+        instr = _outline_toc_instruction(child)
+        if instr is None:
+            continue
+        if _local_name(child.tag) == "sdt":
+            if _rewrite_sdt_outline_toc_cache(child, instr, clean_headings):
+                rewritten += 1
+        elif _local_name(child.tag) == "p":
+            _rewrite_paragraph_outline_toc_cache(child, instr, clean_headings)
+            rewritten += 1
+    return rewritten
+
+
+def _outline_toc_instruction(el) -> Optional[str]:
+    for instr in el.iter(w("instrText")):
+        text = (instr.text or "").strip()
+        if text.startswith(TOC_INSTR_PREFIX) and _toc_seq_id(text) is None:
+            return text
+    return None
+
+
+def _rewrite_sdt_outline_toc_cache(sdt, instr: str, headings: list[tuple[int, str]]) -> bool:
+    content = sdt.find(w("sdtContent"))
+    if content is None:
+        return False
+    paras = [el for el in list(content) if _local_name(el.tag) == "p"]
+    field_idx = next((i for i, p in enumerate(paras) if _outline_toc_instruction(p) is not None), None)
+    if field_idx is None:
+        return False
+
+    old_field_para = paras[field_idx]
+    entry_template = paras[field_idx + 1] if field_idx + 1 < len(paras) else old_field_para
+    for p in paras[field_idx:]:
+        if p.getparent() is content:
+            content.remove(p)
+
+    content.append(_toc_field_start_paragraph(instr, old_field_para))
+    for level, text in headings:
+        content.append(_toc_entry_paragraph(level, text, entry_template))
+    content.append(_toc_field_end_paragraph(old_field_para))
+    return True
+
+
+def _rewrite_paragraph_outline_toc_cache(p, instr: str, headings: list[tuple[int, str]]) -> None:
+    _clear_paragraph_content(p)
+    p.append(_field_run("begin", dirty=True))
+    p.append(_instr_run(instr))
+    p.append(_field_run("separate"))
+    p.append(_text_run(" | ".join(_toc_entry_text(level, text) for level, text in headings)))
+    p.append(_field_run("end"))
+
+
+def _toc_field_start_paragraph(instr: str, template_p):
+    p = _new_paragraph_like(template_p)
+    p.append(_field_run("begin", dirty=True))
+    p.append(_instr_run(instr))
+    p.append(_field_run("separate"))
+    return p
+
+
+def _toc_field_end_paragraph(template_p):
+    p = _new_paragraph_like(template_p)
+    p.append(_field_run("end"))
+    return p
+
+
+def _toc_entry_paragraph(level: int, text: str, template_p):
+    p = _new_paragraph_like(template_p)
+    p.append(_text_run(_toc_entry_text(level, text)))
+    return p
+
+
+def _toc_entry_text(level: int, text: str) -> str:
+    return f"{'  ' * max(0, level - 1)}{text}"
+
+
+def _new_paragraph_like(template_p):
+    p = OxmlElement("w:p")
+    pPr = template_p.find(w("pPr")) if template_p is not None else None
+    if pPr is not None:
+        p.append(copy.deepcopy(pPr))
+    return p
+
+
+def _clear_paragraph_content(p) -> None:
+    for child in list(p):
+        if _local_name(child.tag) != "pPr":
+            p.remove(child)
+
+
+def _field_run(kind: str, *, dirty: bool = False):
+    r = OxmlElement("w:r")
+    fld = OxmlElement("w:fldChar")
+    fld.set(w("fldCharType"), kind)
+    if dirty:
+        fld.set(w("dirty"), "true")
+    r.append(fld)
+    return r
+
+
+def _instr_run(instr: str):
+    r = OxmlElement("w:r")
+    it = OxmlElement("w:instrText")
+    it.text = instr
+    r.append(it)
+    return r
+
+
+def _text_run(text: str):
+    r = OxmlElement("w:r")
+    t = OxmlElement("w:t")
+    t.text = text
+    r.append(t)
+    return r

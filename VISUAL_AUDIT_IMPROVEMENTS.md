@@ -10,7 +10,7 @@ The current visual audit stack is a good V1 foundation:
 - `Pillow` runs deterministic pixel checks such as blank-page and edge-bleed
   detection.
 - `doctor` probes Python packages, external binaries, and the real
-  DOCX-to-PDF-to-PNG pipeline before a visual audit is trusted.
+  DOCX/PPTX/XLSX-to-PDF-to-PNG pipelines before a visual audit is trusted.
 
 This is the right default architecture because pure OOXML inspection cannot prove
 rendered layout correctness. The engine needs a real renderer, then image-level
@@ -35,6 +35,23 @@ Expected behavior:
   write a degraded manifest and clearly report which visual proof is incomplete.
 - `doctor` should always print actionable `install:` or `repair:` hints for
   missing/unusable dependencies.
+
+## Implemented improvements
+
+- Visual manifests now include environment diagnostics: platform, Python version,
+  renderer availability, renderer paths, degraded status, and install/repair
+  hints when available.
+- The visual preflight now smoke-tests the full render chain for DOCX, PPTX, and
+  XLSX instead of treating DOCX success as proof for every Office format.
+- Gated real-render E2E tests now cover `--qa deep` manifest/PNG generation for
+  DOCX, PPTX, and XLSX when `BRANDDOCS_RUN_REAL_RENDER=1` is enabled.
+- DOCX generation now rewrites the visible cache of outline TOC fields from the
+  generated headings before marking the field dirty. This prevents headless
+  LibreOffice renders from showing stale template TOC entries while keeping the
+  TOC field updateable in Word/LibreOffice.
+- The DOCX generator already prunes leading empty body artifacts exposed after
+  caption-index reconciliation, so inherited section breaks that cause blank
+  pre-body pages are not preserved blindly.
 
 ## Recommended improvements
 
@@ -124,15 +141,15 @@ Useful cases:
 OCR should be used as an advisory signal because it can be noisy across fonts,
 languages, and image quality.
 
-### 5. Improve TOC/cache handling
+### 5. Deepen TOC/cache handling
 
-The current DOCX flow marks TOC fields dirty, but headless LibreOffice may still
-render stale cached field results from the template.
+The current DOCX flow marks TOC fields dirty and rewrites the visible outline
+TOC cache from generated headings, but deeper field-cache cases still need work.
 
 Potential fixes:
 
-- clear or rebuild the visible TOC field result cache before render;
-- generate a simplified static TOC when the template allows it;
+- handle nested/multi-column TOCs and more complex field-result structures;
+- generate page-number-aware static TOC entries when the template allows it;
 - add an L1/L2 checklist item for stale TOC/demo entries;
 - use OCR or text extraction from rendered PDF to detect stale visible TOC text.
 
@@ -176,8 +193,8 @@ HTML exports or dashboards, not as the main Office audit engine.
 1. Keep the current LibreOffice + Poppler + Pillow path stable.
 2. Make preflight mandatory in every skill workflow.
 3. Add composition intelligence for inherited structures such as section breaks.
-4. Add manifest diagnostics for degraded visual audits.
-5. Fix stale TOC/cache rendering.
+4. Add richer manifest diagnostics for degraded visual audits.
+5. Deepen stale TOC/cache rendering beyond outline DOCX fields.
 6. Add `PyMuPDF` fallback/cross-check.
 7. Add richer image analysis with `numpy` and `opencv-python` or `scikit-image`.
 8. Add optional OCR for residual visible text.

@@ -203,6 +203,27 @@ class RefreshTocTest(unittest.TestCase):
         doc.add_paragraph("Body", style="Heading 1")
         self.assertEqual(structure.refresh_toc(doc), 0)
 
+    def test_visible_outline_toc_cache_is_rewritten_from_generated_headings(self):
+        doc = Document()
+        doc.add_paragraph("{{title}}", style="Title")
+        _add_toc_field(doc)
+        doc.add_paragraph("Old Template Body", style="Heading 1")
+
+        rewritten = structure.refresh_visible_outline_toc_cache(
+            doc,
+            [(1, "New Real Section"), (2, "Nested Real Topic")],
+        )
+
+        self.assertEqual(rewritten, 1)
+        toc_text = "\n".join(
+            "".join(t.text or "" for t in list(doc.element.body)[c["index"]].iter(w("t")))
+            for c in structure.classify_body_children(doc)
+            if c["region"] == "toc"
+        )
+        self.assertIn("New Real Section", toc_text)
+        self.assertIn("Nested Real Topic", toc_text)
+        self.assertNotIn("entry .... 1", toc_text)
+
 
 # ---------------------------------------------------------------------------
 # C2 - resolver_targets_exist

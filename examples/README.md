@@ -7,16 +7,16 @@ binaries committed here are safe by construction.
 
 | Template | Built by | What it stresses |
 |---|---|---|
-| [`templates/branddocs_template.docx`](templates/branddocs_template.docx) | [`builders/build_branddocs_docx.py`](builders/build_branddocs_docx.py) | multi-slot cover, three indexes (TOC + table + figure), real `numbering.xml` (2-level bullets + numbered list), a custom **BrandDocs Table** style, `SEQ` captions, a boxed **BrandDocs Callout** with an amber accent bar, a header logo, two sections (portrait + a populated landscape appendix carrying a wide rollout-matrix table and a second figure), a footnote |
-| [`templates/branddocs_template.pptx`](templates/branddocs_template.pptx) | [`builders/build_branddocs_pptx.py`](builders/build_branddocs_pptx.py) | multi-placeholder cover, the deck's real masters & layouts, sections, an agenda slide, a native table + chart, a picture, a demo slide |
-| [`templates/branddocs_template.xlsx`](templates/branddocs_template.xlsx) | [`builders/build_branddocs_xlsx.py`](builders/build_branddocs_xlsx.py) | five sheets, named regions, cross-sheet formulas, number formats, named cell styles, a table, conditional formatting, frozen panes, two native charts (a branded bar + a line) |
+| [`templates/branddocs_template.docx`](templates/branddocs_template.docx) | [`builders/build_branddocs_docx.py`](builders/build_branddocs_docx.py) | multi-slot cover with executive scorecard, three indexes (TOC + table + figure), real `numbering.xml` (2-level bullets + numbered list), custom **BrandDocs Table**, **BrandDocs Callout** and **BrandDocs Quote** styles, `SEQ` captions, a header logo, two sections (portrait + a populated landscape appendix carrying a wide rollout-matrix table and a second figure), a risk/readiness matrix, a footnote |
+| [`templates/branddocs_template.pptx`](templates/branddocs_template.pptx) | [`builders/build_branddocs_pptx.py`](builders/build_branddocs_pptx.py) | eleven-slide deck with multi-placeholder cover, the deck's real masters & layouts, injected PowerPoint sections, agenda, KPI dashboard, two native chart families, two native tables including a risk heatmap, picture slide, process diagram approximation, demo slide |
+| [`templates/branddocs_template.xlsx`](templates/branddocs_template.xlsx) | [`builders/build_branddocs_xlsx.py`](builders/build_branddocs_xlsx.py) | seven-sheet workbook with cover scorecard, named regions, cross-sheet formulas, number formats, named cell styles, two native tables, dashboard sheet, scenario sheet with data validation + comment, conditional formatting/data bars, frozen panes, three native charts |
 
 Brand palette (cohesive with the project hero): BrandDocs navy `#16213F`, blue `#2B7CD3`,
 amber `#E0742B`, on light `#EAF1FF` / band `#DCE7FF`.
 
 Each template ships realistic, internally-consistent **synthetic** sample content and visible
-brand polish — a coloured cover band, the generated BrandDocs brand mark (the `assets/hero.svg`
-glyph), and brand-coloured native charts — so the rendered file already reads as a finished
+brand polish — a coloured cover band, a generated text-only BrandDocs wordmark logo, and
+brand-coloured native charts — so the rendered file already reads as a finished
 on-brand document. The body is
 demo content a generation run clears and replaces; the cover, indexes and named slots are the
 reusable surface the skills extract.
