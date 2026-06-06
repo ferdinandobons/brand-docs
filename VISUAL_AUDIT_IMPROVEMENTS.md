@@ -38,7 +38,42 @@ Expected behavior:
 
 ## Recommended improvements
 
-### 1. Add a second PDF rasterizer
+### 1. Add composition intelligence, not literal preservation
+
+The template should be treated as a source of reusable affordances, constraints,
+and brand conventions, not as a byte-for-byte layout script that must be followed
+even when the rendered result is broken.
+
+Important example:
+
+- If a source template contains section breaks that are useful for its original
+  long document but cause two blank pages in the generated result, the skill
+  should not preserve those section breaks blindly.
+- It should record them as available structural elements, understand what they do
+  (page geometry, header/footer transition, orientation, spacing), then decide
+  whether keeping, moving, collapsing, or removing them best serves the generated
+  document.
+- Visual findings such as `visual.blank_page`, stale TOC pages, or large empty
+  regions after front matter should trigger targeted composition repair, not just
+  a warning in the final report.
+
+Target behavior:
+
+1. Render and audit the generated artifact.
+2. Classify each visual defect by likely cause: inherited section break, stale
+   field cache, oversized block, unsupported component, bad pagination, residual
+   placeholder, or style mismatch.
+3. Apply the smallest justified repair to the generated artifact or
+   IntermediateDocument.
+4. Regenerate and rerun the visual audit.
+5. Repeat until the rendered output is clean, or until no further targeted repair
+   can be justified without user input.
+
+The skill should preserve template structures only while they help the final
+document. A visually broken result is stronger evidence than a structural
+preservation preference.
+
+### 2. Add a second PDF rasterizer
 
 Add `PyMuPDF` as a fallback or cross-check after PDF generation.
 
@@ -55,7 +90,7 @@ Suggested use:
 - Optionally compare page count, dimensions, and coarse ink maps between both
   renderers.
 
-### 2. Add stronger image analysis
+### 3. Add stronger image analysis
 
 Add `numpy` plus either `opencv-python` or `scikit-image`.
 
@@ -70,7 +105,7 @@ Useful checks:
 This would upgrade L1 from simple pixel proxies to richer deterministic layout
 proxies.
 
-### 3. Add optional OCR
+### 4. Add optional OCR
 
 Add OCR only as an optional capability, not a hard dependency.
 
@@ -89,7 +124,7 @@ Useful cases:
 OCR should be used as an advisory signal because it can be noisy across fonts,
 languages, and image quality.
 
-### 4. Improve TOC/cache handling
+### 5. Improve TOC/cache handling
 
 The current DOCX flow marks TOC fields dirty, but headless LibreOffice may still
 render stale cached field results from the template.
@@ -104,7 +139,7 @@ Potential fixes:
 This matters because the visual audit can be technically successful while the
 render still shows stale cached entries.
 
-### 5. Store environment diagnostics in the manifest
+### 6. Store environment diagnostics in the manifest
 
 Extend `visual_manifest.json` with:
 
@@ -118,7 +153,7 @@ Extend `visual_manifest.json` with:
 
 This makes audit failures easier to reproduce and compare across machines.
 
-### 6. Add renderer policy per QA mode
+### 7. Add renderer policy per QA mode
 
 Suggested policy:
 
@@ -129,7 +164,7 @@ Suggested policy:
 - future `strict`: fail if full render is unavailable or if L1/L2 checks are not
   clean.
 
-### 7. Keep Playwright out of the Office core path
+### 8. Keep Playwright out of the Office core path
 
 `Playwright` is useful for HTML/web preview audits, but it should not become the
 primary Office renderer. Browser screenshots vary by OS/browser environment and
@@ -140,8 +175,9 @@ HTML exports or dashboards, not as the main Office audit engine.
 
 1. Keep the current LibreOffice + Poppler + Pillow path stable.
 2. Make preflight mandatory in every skill workflow.
-3. Add manifest diagnostics for degraded visual audits.
-4. Fix stale TOC/cache rendering.
-5. Add `PyMuPDF` fallback/cross-check.
-6. Add richer image analysis with `numpy` and `opencv-python` or `scikit-image`.
-7. Add optional OCR for residual visible text.
+3. Add composition intelligence for inherited structures such as section breaks.
+4. Add manifest diagnostics for degraded visual audits.
+5. Fix stale TOC/cache rendering.
+6. Add `PyMuPDF` fallback/cross-check.
+7. Add richer image analysis with `numpy` and `opencv-python` or `scikit-image`.
+8. Add optional OCR for residual visible text.

@@ -142,12 +142,21 @@ the Python engine never calls a model. To run the full two-stage audit:
 3. Open the PNGs listed in `pages[*].png`. For every entry in `checklist`, judge
    PASS/FAIL against the rendered pages, taking `l1_findings` into account.
 4. If any checklist item FAILS (or an L1 WARNING is confirmed visually as a real
-   defect): **repair** the IntermediateDocument/content, **regenerate**, then
-   **re-run the audit**. Loop until the checklist is clean (max 3 iterations by
-   default).
+   defect): **repair** the IntermediateDocument/content or the generated
+   composition, **regenerate**, then **re-run the audit**. Loop until the
+   checklist is clean, or until no further targeted repair can be justified
+   without user input.
 
 L1 findings are WARNING-only and never fail the gate by themselves; the real
 qualitative gate is your L2 judgement.
+
+During repair, treat the template as a source of reusable layout affordances, not
+a rule to preserve blindly. If inherited placeholders, section/agenda slides,
+layout geometry, or other template structures create blank slides, overlaps,
+stale entries, or visibly broken pagination, diagnose the structure as the cause
+and make the smallest targeted composition change. It is acceptable to collapse,
+move, or remove inherited scaffolding when preserving it damages the final deck.
+After every repair, regenerate and rerun `--qa deep`.
 
 ## Current Guarantees and Limits
 

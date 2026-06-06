@@ -137,11 +137,20 @@ the Python engine never calls a model. To run the full two-stage audit:
    PASS/FAIL against the rendered pages, taking `l1_findings` into account.
 4. If any checklist item FAILS (or an L1 `visual.blank_page` / `visual.edge_bleed`
    WARNING is confirmed visually as a real defect): **repair** the
-   IntermediateDocument/content, **regenerate**, then **re-run the audit**. Loop
-   until the checklist is clean (max 3 iterations by default).
+   IntermediateDocument/content or the generated composition, **regenerate**,
+   then **re-run the audit**. Loop until the checklist is clean, or until no
+   further targeted repair can be justified without user input.
 
 L1 findings are WARNING-only and never fail the gate by themselves; the real
 qualitative gate is your L2 judgement.
+
+During repair, treat the template as a source of reusable structure, not a rule
+to preserve blindly. If inherited section breaks, front-matter scaffolding,
+field-result caches, or other template structures create blank pages, stale
+entries, overlaps, or visibly broken pagination, diagnose the structure as the
+cause and make the smallest targeted composition change. It is acceptable to
+collapse, move, or remove a template section break when preserving it damages the
+final generated document. After every repair, regenerate and rerun `--qa deep`.
 
 ## Current Guarantees and Limits
 
