@@ -144,7 +144,9 @@ class ListItem:
         return out
 
     @classmethod
-    def from_dict(cls, data: dict, *, level: int = 0) -> "ListItem":
+    def from_dict(cls, data: dict | str, *, level: int = 0) -> "ListItem":
+        if isinstance(data, str):
+            return cls(runs=textutil.plain_run(data), level=level)
         runs = textutil.normalize_runs(data.get("runs"), text=data.get("text"))
         lvl = int(data.get("level", level))
         kids = [cls.from_dict(c, level=lvl + 1) for c in (data.get("items") or [])]
