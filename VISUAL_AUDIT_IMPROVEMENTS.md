@@ -58,6 +58,10 @@ Expected behavior:
 - The DOCX generator already prunes leading empty body artifacts exposed after
   caption-index reconciliation, so inherited section breaks that cause blank
   pre-body pages are not preserved blindly.
+- A template-based skill eval set now runs in CI for DOCX, PPTX, and XLSX,
+  exercising extract/optional-comprehend/verify/generate and checking residual
+  text removal, native PPTX table survival, named-range fills, and formula
+  preservation.
 
 ## Recommended improvements
 

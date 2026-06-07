@@ -1,0 +1,232 @@
+{
+  "schema_version": "branddocs-skill-eval-1",
+  "description": "Template-based regression prompts that exercise the BrandDocs skill workflow across DOCX, PPTX, and XLSX.",
+  "cases": [
+    {
+      "id": "docx-report-basic",
+      "kind": "docx",
+      "template": "examples/templates/branddocs_template.docx",
+      "brand": "eval-docx",
+      "prompt": "Generate a concise branded operational report from the DOCX template.",
+      "input": {
+        "cover": {
+          "title": "BrandDocs Skill Eval Report",
+          "subtitle": "Autonomous generation reliability check",
+          "fields": {
+            "doc_id": "EVAL-BD-001",
+            "date": "June 7, 2026"
+          }
+        },
+        "blocks": [
+          {
+            "type": "heading",
+            "level": 1,
+            "text": "Autonomous Repair Loop"
+          },
+          {
+            "type": "paragraph",
+            "text": "The generated document keeps the shell brand while replacing the template demo body."
+          },
+          {
+            "type": "callout",
+            "intent": "info",
+            "text": "Warnings should become targeted repair work, not silent acceptance."
+          },
+          {
+            "type": "table",
+            "columns": ["Signal", "Expected action"],
+            "rows": [
+              ["visual.blank_page", "repair composition"],
+              ["visual.ocr_residual_text", "remove stale template text"]
+            ]
+          },
+          {
+            "type": "caption",
+            "text": "Table 1. Skill eval repair signals."
+          }
+        ]
+      },
+      "comprehension": {
+        "confidence": 0.92,
+        "cover_slots": {
+          "sdt.0": {
+            "semantic_role": "title",
+            "purpose": "main cover title",
+            "binds_to": "title",
+            "demo_value": "BrandDocs Brand Operations Review",
+            "fill_rule": "in_place"
+          },
+          "para.1": {
+            "semantic_role": "subtitle",
+            "purpose": "cover subtitle",
+            "binds_to": "subtitle",
+            "demo_value": "Annual Brand Operations Review - BrandDocs Corp (synthetic)",
+            "fill_rule": "in_place"
+          },
+          "para.2": {
+            "semantic_role": "document id",
+            "purpose": "cover identifier",
+            "binds_to": "doc_id",
+            "demo_value": "Document ID: DSK-BR-2026-014",
+            "fill_rule": "in_place"
+          },
+          "para.3": {
+            "semantic_role": "date",
+            "purpose": "cover date",
+            "binds_to": "date",
+            "demo_value": "June 5, 2026",
+            "fill_rule": "in_place"
+          }
+        },
+        "conventions": {
+          "indexes": [
+            {
+              "index_ref": "field.8",
+              "kind": "outline table of contents",
+              "seq_id": null,
+              "feeds_from_role_id": "heading.1",
+              "reconcile": "regenerate"
+            },
+            {
+              "index_ref": "field.17",
+              "kind": "list of tables",
+              "seq_id": "Table",
+              "feeds_from_role_id": "caption",
+              "reconcile": "clear"
+            },
+            {
+              "index_ref": "field.23",
+              "kind": "list of figures",
+              "seq_id": "Figure",
+              "feeds_from_role_id": "caption",
+              "reconcile": "clear"
+            }
+          ],
+          "sections": [
+            {"region_ref": "region.cover", "required": true, "repeatable": false},
+            {"region_ref": "region.toc", "required": true, "repeatable": false},
+            {"region_ref": "region.body", "required": true, "repeatable": true}
+          ]
+        },
+        "role_annotations": {
+          "heading.1": {
+            "purpose": "top-level generated section heading",
+            "generation_rules": "one per major section"
+          },
+          "caption": {
+            "purpose": "caption text that can feed generated lists of tables or figures"
+          }
+        },
+        "demo_classification": {
+          "regions": [
+            {"region_ref": "region.cover", "verdict": "real"},
+            {"region_ref": "region.toc", "verdict": "real"},
+            {"region_ref": "region.body", "verdict": "demo"}
+          ]
+        }
+      },
+      "expect": {
+        "required_text": [
+          "BrandDocs Skill Eval Report",
+          "Autonomous generation reliability check",
+          "EVAL-BD-001",
+          "Autonomous Repair Loop",
+          "The generated document keeps the shell brand",
+          "visual.ocr_residual_text"
+        ],
+        "forbidden_text": [
+          "Brand operating principles",
+          "Annual Brand Operations Review - BrandDocs Corp (synthetic)"
+        ],
+        "min_tables": 1
+      }
+    },
+    {
+      "id": "pptx-native-table",
+      "kind": "pptx",
+      "template": "examples/templates/branddocs_template.pptx",
+      "brand": "eval-pptx",
+      "prompt": "Generate a short branded deck with one native table from the PPTX template.",
+      "input": {
+        "cover": {
+          "title": "BrandDocs Skill Eval Deck"
+        },
+        "blocks": [
+          {
+            "type": "heading",
+            "level": 1,
+            "text": "Quality Signals"
+          },
+          {
+            "type": "paragraph",
+            "text": "The deck should use real PowerPoint objects where the generator supports them."
+          },
+          {
+            "type": "table",
+            "columns": ["Format", "Proof"],
+            "rows": [
+              ["DOCX", "deterministic QA"],
+              ["PPTX", "native table"],
+              ["XLSX", "formula preservation"]
+            ]
+          },
+          {
+            "type": "heading",
+            "level": 1,
+            "text": "Repair Budget"
+          },
+          {
+            "type": "list",
+            "items": [
+              "Regenerate when a targeted fix exists.",
+              "Stop honestly when the blocker needs user intent."
+            ]
+          }
+        ]
+      },
+      "expect": {
+        "required_text": [
+          "BrandDocs Skill Eval Deck",
+          "Quality Signals",
+          "Repair Budget"
+        ],
+        "forbidden_text": [
+          "Click to edit Master title style",
+          "Grow to new regions"
+        ],
+        "min_native_tables": 1
+      }
+    },
+    {
+      "id": "xlsx-formula-preservation",
+      "kind": "xlsx",
+      "template": "examples/templates/branddocs_template.xlsx",
+      "brand": "eval-xlsx",
+      "prompt": "Generate a workbook from named cells and regions while preserving template formulas.",
+      "input": {
+        "cells": {
+          "report_title": "BrandDocs Skill Eval Workbook",
+          "report_subtitle": "Formula-preserving generated workbook",
+          "client_name": "BrandDocs Eval",
+          "period": "FY2026",
+          "headline_kpi": "3 formats audited"
+        },
+        "regions": {
+          "data_block": [
+            ["Format", "Signal", "Status", "Owner"],
+            ["DOCX", "L0 deterministic QA", "Pass", "Skill"],
+            ["PPTX", "Native table authoring", "Pass", "Skill"]
+          ]
+        }
+      },
+      "expect": {
+        "named_values": {
+          "report_title": "BrandDocs Skill Eval Workbook",
+          "client_name": "BrandDocs Eval",
+          "period": "FY2026"
+        },
+        "min_formula_count": 1
+      }
+    }
+  ]
+}

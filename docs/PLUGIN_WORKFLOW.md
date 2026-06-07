@@ -187,3 +187,12 @@ A generated artifact is ready to return when:
 - If visual renderers are unavailable, the final response clearly says visual
   proof is degraded and lists the `doctor` repair hint.
 - The final file path and QA summary are returned to the user.
+
+## Regression Eval
+
+The executable skill eval set lives in `evals/skill_eval_set.json` and is covered
+by `tests/test_skill_eval_set.py`. It runs representative DOCX, PPTX, and XLSX
+workflows against the example templates and checks that generated outputs keep
+the brand contract: no stale demo text in the measured surfaces, native PPTX
+tables remain native, named Excel regions are filled, and workbook formulas
+survive.

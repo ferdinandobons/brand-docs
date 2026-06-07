@@ -140,7 +140,7 @@ The most valuable next reliability improvements are:
 1. **Strict visual mode** - add a future `--qa strict` that fails when full render proof is unavailable or when L1/L2 checks are not clean.
 2. **Native PPTX object authoring** - continue beyond native tables into real PowerPoint charts/images/SmartArt instead of down-rendering them to text, while keeping component-survival warnings.
 3. **Richer visual analysis** - build on the PyMuPDF fallback with optional `numpy`/`opencv-python` or `scikit-image` for overlap, clipping, and large-empty-region detection.
-4. **Skill eval set** - maintain template-based regression prompts for DOCX/PPTX/XLSX and compare outputs with and without the skill, measuring residual demo text, formula survival, component survival, page count, and visual warnings.
+4. **Broader skill evals** - expand the current template-based eval set with more corporate templates, visual-repair traces, and with/without-skill comparisons.
 
 ---
 
@@ -300,6 +300,7 @@ PowerPoint uses the same `IntermediateDocument`; Excel uses a `GridDocument` (na
 | Native PPTX charts / SmartArt / richer component regeneration | 🔭 catalogued, regeneration staged |
 | PyMuPDF PDF raster fallback | ✅ working |
 | Optional OCR rendered-text residual scan | ✅ working when Tesseract is installed |
+| Template-based skill eval set (DOCX/PPTX/XLSX) | ✅ working in CI |
 | Strict visual mode, richer image analysis | 🔭 planned |
 
 Visual Word overflow needs LibreOffice, since Word lays out at render time.
