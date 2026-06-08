@@ -6,6 +6,15 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- PowerPoint: a `chart` block is now authored as a **native PowerPoint chart**
+  (a real `graphicFrame`/`c:chart` via python-pptx), no longer flattened to body
+  text. `bar`/`column`/`line`/`area`/`pie`/`doughnut` map to the matching chart
+  type (unknown -> clustered column, surfaced as INFO); series/categories/title
+  come from the block, and the chart inherits the deck theme's accent colors so it
+  is on-brand by construction. Generation stays byte-idempotent: the data workbook
+  python-pptx embeds carries wall-clock timestamps, so `repack_fixed_timestamps`
+  now normalizes nested OOXML packages recursively. docx/xlsx native chart writers
+  remain deferred (those blocks still degrade loudly).
 - Word: the deterministic cover fill (comprehension absent) now also places
   the authored **subtitle** into the cover slot identified by its resolved
   `cover.subtitle` style - correct-by-style, never guessed from the template's

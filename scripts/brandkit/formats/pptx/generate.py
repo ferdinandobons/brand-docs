@@ -41,11 +41,14 @@ Design (off-brand-by-construction, §C3/M6/M7, plan §6 reconcile-not-rebuild):
 Native PPTX objects: tables (``graphicFrame``/``a:tbl`` via ``shapes.add_table``),
 KPI groups (authored as a native brand table, one row per metric), and images
 (``shapes.add_picture`` from an external ``src``, sized to the body placeholder; an
-unresolved source degrades loudly, never crashes). Charts (``c:chart``) and SmartArt
-are still flattened to body text; each such flattening records a ``block_degraded``
-WARNING (symmetric with the docx vertical) so a deck that loses a native object is
-visible in QA rather than silently down-rendered. A component-survival check
-(shell-vs-output native counts) backs the same guarantee from the QA side.
+unresolved source degrades loudly, never crashes), and charts (a native
+``graphicFrame``/``c:chart`` via ``add_chart``, inheriting the deck theme's accent
+colors so it is on-brand by construction; an unknown ``chart_type`` falls back to a
+clustered column chart with an INFO note). SmartArt is still flattened to body text,
+recording a ``block_degraded`` WARNING (symmetric with the docx vertical) so a deck
+that loses a native object is visible in QA rather than silently down-rendered. A
+component-survival check (shell-vs-output native counts) backs the same guarantee
+from the QA side.
 """
 
 from __future__ import annotations
@@ -55,6 +58,8 @@ from pathlib import Path
 from typing import Optional
 
 from pptx import Presentation
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.enum.shapes import PP_PLACEHOLDER
 
 from brandkit.common import text as textutil
@@ -109,6 +114,7 @@ class SlideChunk:
     lines: list[BodyLine]
     table: Optional[ir.Table] = None
     image: Optional[ir.Image] = None
+    chart: Optional[ir.Chart] = None
 
 
 def generate(
@@ -562,6 +568,9 @@ def _append_content_slides(
             elif chunk.image is not None:
                 _clear_body_placeholder(body)
                 _add_native_picture(slide, prs, chunk.image, body, sink)
+            elif chunk.chart is not None:
+                _clear_body_placeholder(body)
+                _add_native_chart(slide, prs, chunk.chart, body, sink)
             elif body is not None and chunk.lines:
                 _write_body_lines(body, chunk.lines)
 
@@ -596,6 +605,14 @@ def _content_chunks(blocks: list, capacity: int, sink: list) -> list[SlideChunk]
         elif isinstance(block, ir.Image):
             flush_pending()
             chunks.append(SlideChunk(lines=[], image=block))
+        elif isinstance(block, ir.Chart):
+            # Chart -> a real PowerPoint chart shape (native graphicFrame/c:chart),
+            # inheriting the deck theme's accent colors (on-brand by construction).
+            flush_pending()
+            if _chart_has_data(block):
+                chunks.append(SlideChunk(lines=[], chart=block))
+            else:
+                _degrade(sink, "chart", note="had no series/categories; skipped")
         else:
             pending.append(block)
     flush_pending()
@@ -640,6 +657,127 @@ def _add_native_picture(slide, prs, image: ir.Image, body_placeholder, sink) -> 
         _degrade(
             sink, "image", note="not placed in pptx (image decode/placement failed)"
         )
+
+
+# IR ``chart_type`` -> python-pptx XL_CHART_TYPE. A FORMAT mapping, not a brand
+# value. "bar" maps to clustered COLUMNS (the common business "bar chart" is
+# vertical); "barh" is the true horizontal bar. An unknown type falls back to a
+# clustered column chart with an INFO note (a chart of the data is better than a
+# dropped block, and the substitution is surfaced, never silent).
+_CHART_TYPE_MAP = {
+    "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+    "column": XL_CHART_TYPE.COLUMN_CLUSTERED,
+    "barh": XL_CHART_TYPE.BAR_CLUSTERED,
+    "line": XL_CHART_TYPE.LINE,
+    "line_markers": XL_CHART_TYPE.LINE_MARKERS,
+    "area": XL_CHART_TYPE.AREA,
+    "pie": XL_CHART_TYPE.PIE,
+    "doughnut": XL_CHART_TYPE.DOUGHNUT,
+}
+
+
+# Single-series chart families: PowerPoint renders only the FIRST series for these
+# (a pie/doughnut has no second-series slot), so authoring more than one is data
+# loss - surfaced as a WARNING rather than silently hidden.
+_SINGLE_SERIES_TYPES = frozenset({XL_CHART_TYPE.PIE, XL_CHART_TYPE.DOUGHNUT})
+
+
+def _as_chart_number(value):
+    """Coerce a series value to float; a non-numeric value becomes a gap (None),
+    never a crash - the chart still renders the points it can plot."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerced_series(chart: ir.Chart) -> list[tuple[str, tuple]]:
+    """Return ``(name, values)`` for each series with at least one PLOTTABLE value.
+
+    Values are coerced to float (a non-numeric value becomes a gap ``None``). A
+    series whose values are ALL non-numeric coerces to all-``None`` - nothing to
+    plot - and is dropped here so the chart never renders a phantom empty series
+    that looks like data (it is just absent). This is the single source of truth
+    both ``_chart_has_data`` (the gate) and ``_add_native_chart`` (the writer) use,
+    so the gate and the render can never disagree."""
+    out: list[tuple[str, tuple]] = []
+    for series in chart.series or []:
+        if not isinstance(series, dict):
+            continue
+        values = series.get("values")
+        if not values:
+            continue
+        nums = tuple(_as_chart_number(v) for v in values)
+        if not any(v is not None for v in nums):
+            continue
+        out.append((str(series.get("name") or ""), nums))
+    return out
+
+
+def _chart_has_data(chart: ir.Chart) -> bool:
+    """True when the chart has a category axis AND at least one series with a
+    plottable numeric value - exactly what ``_add_native_chart`` can render. An
+    empty (or all-non-numeric) chart degrades loudly upstream rather than producing
+    a blank chart shape."""
+    return bool(chart.categories) and bool(_coerced_series(chart))
+
+
+def _add_native_chart(slide, prs, chart: ir.Chart, body_placeholder, sink) -> None:
+    """Author an ``ir.Chart`` as a REAL PowerPoint chart (a ``graphicFrame``/
+    ``c:chart`` via python-pptx ``add_chart``), sized to the body placeholder.
+
+    The chart inherits the DECK THEME's accent colors, so it is on-brand by
+    construction - no literal colors are injected. ``chart.title`` is authoritative
+    when present. An unmappable type falls back to a clustered column chart (INFO);
+    a build failure degrades to a loud ``block_degraded`` WARNING, never a crash or
+    a silent drop. The embedded data workbook python-pptx creates is timestamp-
+    normalized by ``repack_fixed_timestamps`` so generation stays byte-idempotent.
+    """
+    chart_type = _CHART_TYPE_MAP.get((chart.chart_type or "bar").lower())
+    if chart_type is None:
+        chart_type = XL_CHART_TYPE.COLUMN_CLUSTERED
+        sink.append(
+            Finding(
+                "chart_type_fallback",
+                schema.Severity.INFO.value,
+                f"chart_type {chart.chart_type!r} unknown; "
+                "rendered as a clustered column chart",
+            )
+        )
+
+    plottable = _coerced_series(chart)
+    if not plottable:
+        _degrade(sink, "chart", note="had no usable numeric series; skipped")
+        return
+    # A pie/doughnut shows only its first series; surface the dropped ones rather
+    # than hiding them silently (the chart is still authored from the first series).
+    if chart_type in _SINGLE_SERIES_TYPES and len(plottable) > 1:
+        sink.append(
+            Finding(
+                "chart_series_truncated",
+                schema.Severity.WARNING.value,
+                f"a {chart.chart_type!r} chart renders only the first of "
+                f"{len(plottable)} series; the others are not shown",
+            )
+        )
+        plottable = plottable[:1]
+
+    data = CategoryChartData()
+    data.categories = [str(c) for c in chart.categories]
+    for name, values in plottable:
+        data.add_series(name, values)
+
+    left, top, width, height = _table_bounds(prs, body_placeholder)
+    try:
+        frame = slide.shapes.add_chart(chart_type, left, top, width, height, data)
+    except Exception:
+        _degrade(sink, "chart", note="not placed in pptx (chart build failed)")
+        return
+    native = frame.chart
+    title = chart.title or ""
+    native.has_title = bool(title)
+    if title:
+        native.chart_title.text_frame.text = title
 
 
 def _clear_body_placeholder(body) -> None:
@@ -1014,11 +1152,12 @@ def _body_lines(blocks: list, sink: list) -> list[BodyLine]:
     ``indent`` (level) so the layout supplies the bullet; quotes (with attribution),
     captions and callouts each become their own line(s).
 
-    Tables are handled by ``_content_chunks`` and authored as native PowerPoint
-    table shapes. Charts, KPI, SmartArt and images are still flattened to body text
-    because those native PPTX writers are not built yet. Each such flattening
-    records a ``block_degraded`` WARNING on ``sink`` so the down-render is visible
-    in QA (symmetric with the docx vertical), never silent.
+    Tables, KPI groups, images and charts are intercepted by ``_content_chunks``
+    and authored as native shapes BEFORE reaching here; the matching branches below
+    are a defensive fallback that only fires when ``_body_lines`` is called directly
+    (e.g. a unit test). SmartArt has no native writer yet and is flattened to body
+    text. Each flattening records a ``block_degraded`` WARNING on ``sink`` so the
+    down-render is visible in QA (symmetric with the docx vertical), never silent.
     """
     lines: list[BodyLine] = []
     for block in blocks:

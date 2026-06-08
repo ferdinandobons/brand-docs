@@ -297,6 +297,7 @@ def _capabilities() -> dict:
         "extracts_placeholder_catalog": True,
         "generates_from_shell": True,
         "overflow_guard": "conservative_text_split",
+        "native_charts": True,
     }
 
 

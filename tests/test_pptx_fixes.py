@@ -1625,5 +1625,193 @@ class AgendaDetectionHonorsBodyIdx(unittest.TestCase):
             self.assertIsNone(pg._existing_agenda_slide(prs, 1))
 
 
+# ---------------------------------------------------------------------------
+# Native PPTX charts (ir.Chart -> real graphicFrame/c:chart, theme-colored)
+# ---------------------------------------------------------------------------
+class NativeChartTest(unittest.TestCase):
+    """A Chart block is authored as a REAL PowerPoint chart (not flattened to body
+    text): correct type/series/categories/title, on-brand by theme inheritance,
+    byte-idempotent (the embedded data workbook's wall-clock timestamps are
+    normalized), and graceful on empty/unknown input - never a crash or silent drop.
+    """
+
+    _IDOC = {
+        "blocks": [
+            {"type": "heading", "level": 1, "runs": [{"t": "Ricavi"}]},
+            {
+                "type": "chart",
+                "chart_type": "bar",
+                "title": "Ricavi (M)",
+                "categories": ["Q1", "Q2", "Q3"],
+                "series": [
+                    {"name": "A", "values": [1, 2, 3]},
+                    {"name": "B", "values": [3, 2, 1]},
+                ],
+            },
+            {"type": "heading", "level": 1, "runs": [{"t": "Quota"}]},
+            {
+                "type": "chart",
+                "chart_type": "pie",
+                "title": "Quota",
+                "categories": ["X", "Y"],
+                "series": [{"name": "S", "values": [60, 40]}],
+            },
+        ]
+    }
+
+    def _charts(self, prs):
+        return [sh.chart for s in prs.slides for sh in s.shapes if sh.has_chart]
+
+    def test_chart_blocks_become_native_charts(self):
+        from pptx.enum.chart import XL_CHART_TYPE
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            template = tmp / "t.pptx"
+            _branded_template(template)
+            profile = _extract_profile(template)
+            out = tmp / "out.pptx"
+            sink: list[Finding] = []
+            pg.generate(profile, template, parse_idoc(self._IDOC), out, findings=sink)
+
+            charts = self._charts(Presentation(out))
+            self.assertEqual(len(charts), 2, "both chart blocks should be native")
+            kinds = {c.chart_type for c in charts}
+            self.assertIn(XL_CHART_TYPE.COLUMN_CLUSTERED, kinds)  # "bar" -> columns
+            self.assertIn(XL_CHART_TYPE.PIE, kinds)
+            col = next(
+                c for c in charts if c.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED
+            )
+            self.assertEqual(len(col.plots[0].series), 2)
+            self.assertEqual(list(col.plots[0].categories), ["Q1", "Q2", "Q3"])
+            self.assertEqual(col.chart_title.text_frame.text, "Ricavi (M)")
+            # Series NAMES and VALUES round-trip intact (a writer that reversed,
+            # duplicated or garbled the data would be caught here, not just by count).
+            s0, s1 = col.plots[0].series[0], col.plots[0].series[1]
+            self.assertEqual((s0.name, tuple(s0.values)), ("A", (1.0, 2.0, 3.0)))
+            self.assertEqual((s1.name, tuple(s1.values)), ("B", (3.0, 2.0, 1.0)))
+            # On-brand by construction: no explicit series fill is set, so the chart
+            # inherits the deck theme's accent colors (a regression injecting a literal
+            # color would give the fill a concrete .type instead of None).
+            self.assertIsNone(s0.format.fill.type, "series fill must inherit the theme")
+            # Chart is NOT degraded (it is native, not flattened to text).
+            self.assertFalse(
+                any(f.check == "block_degraded" and "chart" in f.message for f in sink)
+            )
+
+    def _embedded_workbook_cores(self, path: Path) -> list[str]:
+        """docProps/core.xml of every embedded ``.xlsx`` workbook in the deck."""
+        import io
+        import zipfile
+
+        cores: list[str] = []
+        with zipfile.ZipFile(path) as outer:
+            for name in outer.namelist():
+                if "embeddings" in name and name.endswith(".xlsx"):
+                    with zipfile.ZipFile(io.BytesIO(outer.read(name))) as inner:
+                        cores.append(inner.read("docProps/core.xml").decode("utf-8"))
+        return cores
+
+    def test_chart_generation_is_byte_idempotent(self):
+        # python-pptx embeds a data workbook whose core.xml carries WALL-CLOCK
+        # dcterms timestamps; repack_fixed_timestamps must normalize the nested
+        # package so two generations are byte-identical.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            template = tmp / "t.pptx"
+            _branded_template(template)
+            profile = _extract_profile(template)
+            a, b = tmp / "a.pptx", tmp / "b.pptx"
+            pg.generate(profile, template, parse_idoc(self._IDOC), a)
+            pg.generate(profile, template, parse_idoc(self._IDOC), b)
+            self.assertEqual(
+                a.read_bytes(),
+                b.read_bytes(),
+                "native-chart deck is not byte-idempotent",
+            )
+            # The chart actually produced an embedded workbook (so the test exercises
+            # the nested-package path, not a no-op)...
+            cores = self._embedded_workbook_cores(a)
+            self.assertTrue(cores, "no embedded chart workbook was produced")
+            self.assertTrue(self._charts(Presentation(a)), "no native chart authored")
+            # ...and its wall-clock dcterms timestamps were PINNED to the fixed epoch.
+            # This proves the fix RAN (the two in-process builds alone could coincide
+            # within one wall-clock second and pass even without normalization).
+            for core in cores:
+                self.assertIn("1980-01-01T00:00:00Z", core)
+                self.assertNotIn("2026", core)  # no surviving wall-clock year
+
+    def test_unknown_type_falls_back_and_empty_chart_degrades(self):
+        idoc = {
+            "blocks": [
+                {"type": "heading", "level": 1, "runs": [{"t": "Odd"}]},
+                {
+                    "type": "chart",
+                    "chart_type": "nonsense",
+                    "categories": ["A", "B"],
+                    "series": [{"name": "S", "values": [1, 2]}],
+                },
+                {"type": "heading", "level": 1, "runs": [{"t": "Empty"}]},
+                {"type": "chart", "chart_type": "bar", "categories": [], "series": []},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            template = tmp / "t.pptx"
+            _branded_template(template)
+            profile = _extract_profile(template)
+            out = tmp / "out.pptx"
+            sink: list[Finding] = []
+            pg.generate(profile, template, parse_idoc(idoc), out, findings=sink)
+            # The unknown type still renders a (fallback) native chart, and the
+            # fallback is specifically a clustered column chart (not just "some" chart).
+            from pptx.enum.chart import XL_CHART_TYPE
+
+            rendered = self._charts(Presentation(out))
+            self.assertEqual(len(rendered), 1)
+            self.assertEqual(rendered[0].chart_type, XL_CHART_TYPE.COLUMN_CLUSTERED)
+            self.assertTrue(
+                any(f.check == "chart_type_fallback" for f in sink),
+                "unknown chart_type should surface an INFO fallback, not be silent",
+            )
+            # ...and the empty chart degrades loudly (never a silent drop).
+            self.assertTrue(
+                any(f.check == "block_degraded" and "chart" in f.message for f in sink)
+            )
+
+    def test_multi_series_pie_warns_and_keeps_first_series(self):
+        # A pie renders only its first series; the dropped series are surfaced as a
+        # WARNING (data loss is visible), and exactly one series is plotted.
+        idoc = {
+            "blocks": [
+                {"type": "heading", "level": 1, "runs": [{"t": "Pie"}]},
+                {
+                    "type": "chart",
+                    "chart_type": "pie",
+                    "categories": ["A", "B"],
+                    "series": [
+                        {"name": "First", "values": [1, 2]},
+                        {"name": "Second", "values": [3, 4]},
+                    ],
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            template = tmp / "t.pptx"
+            _branded_template(template)
+            profile = _extract_profile(template)
+            out = tmp / "out.pptx"
+            sink: list[Finding] = []
+            pg.generate(profile, template, parse_idoc(idoc), out, findings=sink)
+            self.assertTrue(
+                any(f.check == "chart_series_truncated" for f in sink),
+                "a multi-series pie must surface the dropped series, not hide them",
+            )
+            charts = self._charts(Presentation(out))
+            self.assertEqual(len(charts), 1)
+            self.assertEqual(len(charts[0].plots[0].series), 1)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

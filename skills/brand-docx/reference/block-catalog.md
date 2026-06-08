@@ -36,8 +36,13 @@ The 16 block `type` values (the keys of `BLOCK_TYPES`):
   `label`, `value`, optional `delta`) and an optional `layout`. Resolves to
   `component:kpi.{layout}`.
 - **`chart`** - a chart. Carries `chart_type` (default `"bar"`), `series`
-  (`[{name, values}]`), `categories`, and an optional `title`. Resolves to
-  `chart.{type}` (clone-fill of a template chart part).
+  (`[{name, values}]`), `categories`, and an optional `title`. On the **pptx**
+  vertical this is authored as a NATIVE PowerPoint chart (a real
+  `graphicFrame`/`c:chart`) that inherits the deck theme's accent colors, so it is
+  on-brand by construction; `bar`/`column`/`line`/`area`/`pie`/`doughnut` map to
+  the matching chart type and an unknown type falls back to a clustered column
+  chart (surfaced as an INFO, never silent). On docx/xlsx a native chart writer is
+  still deferred and the block degrades loudly.
 - **`smartart`** - a diagram. Carries `diagram` (default `"process"`) and `nodes`
   (`[{text, children}]`). Resolves to `smartart.{diagram}` (clone-fill or rendered
   image).

@@ -9,8 +9,9 @@ tests the skill against the showcase templates and a permanent regression net:
   * generation never raises and QA never FAILS (degradations are warnings, not errors);
   * inline emphasis + hyperlinks SURVIVE on docx (they used to be silently flattened);
   * `divider` is now a native docx artifact (no longer a block_degraded warning);
-  * the still-deferred native writers (kpi/chart/smartart/image) degrade LOUDLY
-    (a visible block_degraded finding), never silently.
+  * `chart` is a native PowerPoint chart on the pptx vertical (docx chart is still
+    deferred); the still-deferred native writers degrade LOUDLY (a visible
+    block_degraded finding), never silently.
 
 The templates are 100% synthetic BrandDocs showcases; no proprietary file is used.
 """
@@ -139,11 +140,6 @@ KITCHEN = {
         {"type": "paragraph", "text": "End."},
     ],
 }
-
-# Block types with no native writer yet: they must degrade LOUDLY (a block_degraded
-# finding), never silently. Updated as native writers land.
-_DOCX_DEGRADED = {"kpi", "chart", "smartart", "image", "toc"}
-_PPTX_DEGRADED = {"kpi", "chart", "smartart", "image", "divider", "toc"}
 
 
 def _degraded_kinds(findings) -> set[str]:
@@ -304,15 +300,16 @@ class PptxKitchenSink(_Base):
                 [f.message for f in report.findings if f.severity == "ERROR"],
             )
             degraded = _degraded_kinds(sink)
-            # KPI (native table) and Image (native picture from a real src) no longer
-            # degrade; chart/smartart still have no native writer and degrade loudly.
+            # KPI (native table), Image (native picture from a real src) and Chart
+            # (native PowerPoint chart) no longer degrade; only smartart still has no
+            # native writer and degrades loudly.
             self.assertEqual(
-                degraded & {"kpi", "image"},
+                degraded & {"kpi", "image", "chart"},
                 set(),
-                f"kpi/image should be native now: {degraded}",
+                f"kpi/image/chart should be native now: {degraded}",
             )
-            self.assertTrue({"chart", "smartart"} <= degraded)
-            # A picture shape and a (KPI) table shape are actually authored.
+            self.assertTrue({"smartart"} <= degraded)
+            # A picture shape, a (KPI) table shape and a chart shape are authored.
             prs = Presentation(out)
             has_pic = any(
                 sh.shape_type == 13
@@ -320,8 +317,10 @@ class PptxKitchenSink(_Base):
                 for sh in s.shapes  # PICTURE
             )
             has_tbl = any(sh.has_table for s in prs.slides for sh in s.shapes)
+            has_chart = any(sh.has_chart for s in prs.slides for sh in s.shapes)
             self.assertTrue(has_pic, "native picture not placed")
             self.assertTrue(has_tbl, "native KPI/table shape not placed")
+            self.assertTrue(has_chart, "native chart shape not placed")
 
     def test_reconcile_path_no_duplicate_parts(self):
         # Reconcile/comprehension path against the SHOWCASE deck: clearing a demo
