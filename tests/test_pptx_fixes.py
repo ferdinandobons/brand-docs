@@ -41,6 +41,7 @@ from brandkit.ir import components as ir_components
 from brandkit.ir import model as ir
 from brandkit.ir.model import parse_idoc
 from brandkit.profile import schema, store
+from brandkit.qa import checks_deterministic as cd
 from brandkit.qa.model import Finding
 
 
@@ -1362,19 +1363,26 @@ class PptxCheapFidelityTest(unittest.TestCase):
                 ]
             )
             out = tp / "out.pptx"
-            findings: list[Finding] = []
-            pg.generate(prof, _COMPLEX_PPTX, idoc, out, findings=findings)
-            table_survival = [
-                f
-                for f in findings
-                if f.check == "component_survival" and "native table" in f.message
-            ]
-            self.assertEqual(table_survival, [])
+            sink: list[Finding] = []
+            pg.generate(prof, _COMPLEX_PPTX, idoc, out, findings=sink)
+            # Single source of truth: the GENERATOR no longer emits component_survival
+            # (it used to, with drop-to-zero semantics, duplicating the QA gate).
+            self.assertEqual(
+                [f for f in sink if f.check == "component_survival"],
+                [],
+                "generator must not emit component_survival; the QA gate owns it",
+            )
+            # The authored native table survives, so the QA gate (the authority) reports
+            # NO tables-survival drop (the unauthored chart/picture legitimately drop -
+            # asserted by the sibling test below).
+            survival = cd.check_component_survival(_COMPLEX_PPTX, out, prof)
+            self.assertEqual([f for f in survival if "tables" in f.message], [])
 
     # CC-3(b) - native component lost from shell -> component_survival WARNING -----
     def test_component_survival_warns_when_native_table_lost(self) -> None:
         # The complex shell carries a native table/chart/picture; a deterministic
-        # rebuild that emits only text down-renders them -> survival WARNINGs.
+        # rebuild that emits only text down-renders them -> the QA gate (single
+        # source of truth) WARNs for each lost family.
         with tempfile.TemporaryDirectory() as td:
             tp = Path(td)
             prof = _extract_on_disk(_COMPLEX_PPTX, tp, name="acme")
@@ -1385,17 +1393,13 @@ class PptxCheapFidelityTest(unittest.TestCase):
                 ]
             )
             out = tp / "out.pptx"
-            findings: list[Finding] = []
-            pg.generate(prof, _COMPLEX_PPTX, idoc, out, findings=findings)
-            survival = {f.check for f in findings if f.check == "component_survival"}
-            self.assertIn("component_survival", survival)
-            self.assertTrue(
-                all(
-                    f.severity == "WARNING"
-                    for f in findings
-                    if f.check == "component_survival"
-                )
-            )
+            pg.generate(prof, _COMPLEX_PPTX, idoc, out)
+            findings = cd.check_component_survival(_COMPLEX_PPTX, out, prof)
+            self.assertTrue(findings, "lost native components must be WARNed")
+            self.assertTrue(all(f.check == "component_survival" for f in findings))
+            self.assertTrue(all(f.severity == "WARNING" for f in findings))
+            # The table that the shell carried is gone -> reported by family.
+            self.assertTrue(any("tables" in f.message for f in findings))
 
     # P4 - filled cover placeholder keeps its run formatting (rPr re-assertion) ----
     def test_cover_fill_preserves_run_formatting(self) -> None:

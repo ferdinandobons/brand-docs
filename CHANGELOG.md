@@ -25,6 +25,14 @@ All notable changes to BrandDocs are documented in this file.
   SDT keep working via core-property sync; extra cover fields (date/id/author)
   remain the comprehension path's job and are still surfaced as unplaced.
 
+### Changed
+
+- `component_survival` now has a single source of truth. The pptx generator's
+  own pre-reconcile, drop-to-zero variant was removed; the QA gate's
+  `check_component_survival` (which re-reads the shell and output independently,
+  for all three formats, on any count decrease) is the sole emitter. This ends the
+  duplicate, differently-worded `component_survival` findings a pptx run produced.
+
 ## [0.2.0] - 2026-06-08
 
 Hardening release: correctness fixes across all three formats, a real

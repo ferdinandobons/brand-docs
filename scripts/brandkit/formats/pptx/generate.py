@@ -159,8 +159,6 @@ def generate(
     # fabricates a placeholder.
     body_ph_idx = _body_ph_idx(resolver)
 
-    shell_components = structure.inventory_components(prs)
-
     if store.comprehension_is_present(profile):
         _generate_reconciled(
             prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
@@ -170,12 +168,12 @@ def generate(
             prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
         )
 
-    # Component-survival check (plan CC-3(b)): a native table/chart/picture present
-    # in the shell that has no counterpart in the output is WARNed, so a deck that
-    # loses a native object is visible in QA rather than silently down-rendered.
-    sink.extend(
-        _check_component_survival(shell_components, structure.inventory_components(prs))
-    )
+    # Component survival (a native table/chart/picture in the shell with no
+    # counterpart in the output) is checked in ONE place: the QA gate's
+    # ``check_component_survival`` (checks_deterministic.py), which re-reads shell
+    # and output independently for all three formats. The generator no longer runs
+    # its own pre-reconcile, drop-to-zero variant - that produced duplicate
+    # ``component_survival`` findings with different semantics on the same output.
 
     # Pin the package modified time so two identical generations are byte-identical
     # (python-pptx stamps ``dcterms:modified`` at save otherwise).
@@ -188,30 +186,6 @@ def generate(
     # timestamps need normalizing for byte-idempotent re-runs.
     repack_fixed_timestamps(out)
     return out
-
-
-def _check_component_survival(before: dict, after: dict) -> list[Finding]:
-    """WARN when a native component family present in the shell vanished in output.
-
-    ``before``/``after`` are ``inventory_components`` totals (``table`` / ``chart``
-    / ``picture`` counts). The check is deterministic and model-free: it fires only
-    when a family that the shell carried drops to zero, so a down-render (a native
-    object flattened to text) is surfaced. A count *decrease* that stays > 0 is not
-    flagged (reconcile legitimately rewrites body slides); a family disappearing
-    entirely is the signal that a component was lost.
-    """
-    findings: list[Finding] = []
-    for family in ("table", "chart", "picture"):
-        if before.get(family, 0) > 0 and after.get(family, 0) == 0:
-            findings.append(
-                Finding(
-                    "component_survival",
-                    schema.Severity.WARNING.value,
-                    f"native {family} present in shell ({before[family]}) is absent "
-                    f"from the output deck (down-rendered to text or dropped)",
-                )
-            )
-    return findings
 
 
 # ---------------------------------------------------------------------------
