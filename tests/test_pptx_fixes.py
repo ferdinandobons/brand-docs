@@ -1579,6 +1579,113 @@ class ComponentExpansionSymmetryTest(unittest.TestCase):
                 pg.generate(profile, template, idoc, out)
 
 
+class FragmentSlotSubstitutionTest(unittest.TestCase):
+    """A referencing block's ``slots`` fill ``{{name}}`` tokens in the fragment
+    template at expansion time, without mutating the shared profile registry.
+
+    Slot parameterization (TASK: fragments) is now wired: ``expand_components``
+    substitutes ``{{name}}`` -> ``slots[name]`` at the dict level (a deep copy)
+    before parsing, so it works for every text-bearing field. An unfilled token
+    resolves to the empty string and is never leaked as literal ``{{...}}``.
+    """
+
+    @staticmethod
+    def _profile_with_slotted_fragment() -> dict:
+        prof = schema.build_envelope("pptx", {"name": "deck"})
+        prof["components"] = {
+            "note": {
+                "blocks": [
+                    {"type": "heading", "level": 2, "runs": [{"t": "{{title}}"}]},
+                    {"type": "paragraph", "runs": [{"t": "Body: {{body}}"}]},
+                ]
+            }
+        }
+        return prof
+
+    @staticmethod
+    def _runs_text(expanded) -> str:
+        return " ".join(
+            r.get("t", "")
+            for b in expanded.blocks
+            for r in (getattr(b, "runs", []) or [])
+        )
+
+    def test_slots_substituted_into_runs(self) -> None:
+        prof = self._profile_with_slotted_fragment()
+        idoc = parse_idoc(
+            {
+                "blocks": [
+                    {
+                        "type": "component",
+                        "ref": "note",
+                        "slots": {"title": "Hello", "body": "World"},
+                    }
+                ]
+            }
+        )
+        joined = self._runs_text(ir_components.expand_components(idoc, prof))
+        self.assertIn("Hello", joined)
+        self.assertIn("Body: World", joined)
+        self.assertNotIn("{{title}}", joined)
+        self.assertNotIn("{{body}}", joined)
+
+    def test_unfilled_slot_resolves_empty_not_leaked(self) -> None:
+        prof = self._profile_with_slotted_fragment()
+        idoc = parse_idoc(
+            {"blocks": [{"type": "component", "ref": "note", "slots": {"title": "X"}}]}
+        )
+        joined = self._runs_text(ir_components.expand_components(idoc, prof))
+        self.assertNotIn("{{body}}", joined)  # token not leaked into output
+        self.assertIn("Body:", joined)  # surrounding literal text preserved
+
+    def test_no_slots_reference_strips_tokens(self) -> None:
+        # A reference with NO slots must still strip tokens (-> "") rather than leak
+        # the literal {{name}} into the output.
+        prof = self._profile_with_slotted_fragment()
+        idoc = parse_idoc({"blocks": [{"type": "component", "ref": "note"}]})
+        joined = self._runs_text(ir_components.expand_components(idoc, prof))
+        self.assertNotIn("{{title}}", joined)
+        self.assertNotIn("{{body}}", joined)
+        self.assertIn("Body:", joined)  # surrounding literal text preserved
+
+    def test_none_slot_value_becomes_empty_not_none_string(self) -> None:
+        prof = self._profile_with_slotted_fragment()
+        idoc = parse_idoc(
+            {
+                "blocks": [
+                    {
+                        "type": "component",
+                        "ref": "note",
+                        "slots": {"title": None, "body": "ok"},
+                    }
+                ]
+            }
+        )
+        joined = self._runs_text(ir_components.expand_components(idoc, prof))
+        self.assertNotIn("None", joined)  # a null slot -> "" not the string "None"
+        self.assertIn("Body: ok", joined)
+
+    def test_registry_not_mutated_by_slot_fill(self) -> None:
+        prof = self._profile_with_slotted_fragment()
+        idoc = parse_idoc(
+            {
+                "blocks": [
+                    {
+                        "type": "component",
+                        "ref": "note",
+                        "slots": {"title": "Z", "body": "Q"},
+                    }
+                ]
+            }
+        )
+        ir_components.expand_components(idoc, prof)
+        # The template still carries the unfilled tokens: substitution deep-copies,
+        # it never mutates the profile registry the fragment lives in.
+        self.assertEqual(
+            prof["components"]["note"]["blocks"][0]["runs"][0]["t"], "{{title}}"
+        )
+
+
 class FragmentRegistryValidationTest(unittest.TestCase):
     """``schema.validate`` reports a malformed components/sections registry entry.
 

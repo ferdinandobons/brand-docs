@@ -207,6 +207,22 @@ class Verdict(str, Enum):
     MIXED = "mixed"
 
 
+class FragmentKind(str, Enum):
+    """Which reusable-fragment registry a comprehension proposal feeds.
+
+    ``component`` - a single inline fragment; lands in ``profile['components']``
+                    and is referenced by a ``component`` IID block.
+    ``section``   - a multi-block reusable unit; lands in ``profile['sections']``
+                    and is referenced by a ``section`` IID block.
+
+    This is a closed enum because each value maps to a real engine branch (which
+    registry the validated proposal is written into).
+    """
+
+    COMPONENT = "component"
+    SECTION = "section"
+
+
 class OverflowCapability(str, Enum):
     """Per-format overflow detection mechanism (§6.5). docx never estimates."""
 
@@ -790,6 +806,7 @@ COMPREHENSION_STATUSES: frozenset[str] = frozenset(e.value for e in Comprehensio
 FILL_RULES: frozenset[str] = frozenset(e.value for e in FillRule)
 RECONCILE_RULES: frozenset[str] = frozenset(e.value for e in Reconcile)
 VERDICTS: frozenset[str] = frozenset(e.value for e in Verdict)
+FRAGMENT_KINDS: frozenset[str] = frozenset(e.value for e in FragmentKind)
 
 
 def empty_comprehension() -> dict:
@@ -809,6 +826,10 @@ def empty_comprehension() -> dict:
         "conventions": {"indexes": [], "sections": []},
         "role_annotations": {},
         "demo_classification": {"regions": []},
+        # Additive: model-proposed reusable fragments. On a clean merge each entry
+        # is DERIVED into profile['components'] / profile['sections'] (the existing
+        # registries expand_components inlines). Empty is the norm.
+        "fragments": [],
     }
 
 
@@ -937,6 +958,49 @@ def _validate_comprehension(comp: Any) -> list[str]:
                                 f"{path}.verdict: illegal value {verdict!r} "
                                 f"(legal: {sorted(VERDICTS)})"
                             )
+
+    # fragments: [ { ref, kind, blocks, purpose? } ] - reusable-fragment proposals.
+    problems.extend(_validate_comp_fragments(comp.get("fragments")))
+    return problems
+
+
+def _validate_comp_fragments(fragments: Any) -> list[str]:
+    """Validate ``comprehension.fragments`` (reusable-fragment proposals).
+
+    SHAPE-ONLY, consistent with the rest of ``_validate_comprehension``: each
+    entry must carry a non-empty string ``ref``, a closed-enum ``kind``
+    (``component`` | ``section``), and a non-empty ``blocks`` list. ``purpose`` is
+    an optional advisory string. The block CONTENTS are NOT parsed here - that is
+    the fail-closed ``check_fragments`` membership check (it needs
+    ``ir.model.block_from_dict`` and must reject, not just shape-flag). Absent /
+    empty is fine (the default).
+    """
+    if fragments is None:
+        return []
+    if not isinstance(fragments, list):
+        return ["comprehension.fragments: must be a list"]
+    problems: list[str] = []
+    for i, frag in enumerate(fragments):
+        path = f"comprehension.fragments[{i}]"
+        if not isinstance(frag, dict):
+            problems.append(f"{path}: must be an object")
+            continue
+        ref = frag.get("ref")
+        if not isinstance(ref, str) or not ref:
+            problems.append(f"{path}.ref: required non-empty string")
+        kind = frag.get("kind")
+        if kind not in FRAGMENT_KINDS:
+            problems.append(
+                f"{path}.kind: illegal value {kind!r} (legal: {sorted(FRAGMENT_KINDS)})"
+            )
+        blocks = frag.get("blocks")
+        if not isinstance(blocks, list) or not blocks:
+            problems.append(f"{path}.blocks: required non-empty list of block dicts")
+        purpose = frag.get("purpose")
+        if purpose is not None and not isinstance(purpose, str):
+            problems.append(
+                f"{path}.purpose: must be a string or null, got {purpose!r}"
+            )
     return problems
 
 

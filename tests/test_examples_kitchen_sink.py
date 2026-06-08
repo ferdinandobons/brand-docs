@@ -262,6 +262,51 @@ class DocxKitchenSink(_Base):
                 hashlib.sha256(b.read_bytes()).hexdigest(),
             )
 
+    def test_populated_fragment_is_reused_on_brand_and_idempotent(self):
+        # The (c) coverage gap: a populated component fragment (the shape a clean
+        # comprehend merge writes) is referenced by a `component` block, its
+        # `{{slots}}` filled by the reference, rendered ON-BRAND through the normal
+        # resolve+write path, and generation stays byte-idempotent.
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            loaded.profile["components"]["case_note"] = {
+                "blocks": [
+                    {"type": "heading", "level": 2, "runs": [{"t": "{{title}}"}]},
+                    {"type": "paragraph", "runs": [{"t": "{{body}}"}]},
+                ]
+            }
+            data = {
+                "blocks": [
+                    {
+                        "type": "component",
+                        "ref": "case_note",
+                        "slots": {
+                            "title": "Reusable Heading",
+                            "body": "Reusable body text.",
+                        },
+                    }
+                ]
+            }
+            a, b = td / "frag_a.docx", td / "frag_b.docx"
+            docx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(data), a
+            )
+            docx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(data), b
+            )
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
+            from docx import Document
+
+            text = "\n".join(p.text for p in Document(a).paragraphs)
+            self.assertIn("Reusable Heading", text)  # slot substituted into heading
+            self.assertIn("Reusable body text.", text)  # slot substituted into body
+            self.assertNotIn("{{title}}", text)  # token never leaked
+            self.assertNotIn("{{body}}", text)
+
 
 class PptxKitchenSink(_Base):
     KIND = "pptx"

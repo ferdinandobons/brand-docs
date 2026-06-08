@@ -60,9 +60,9 @@ stamping `source_shell_sha256` from the live shell hash. On any finding it write
 the offending refs, and retry. A clean merge is idempotent: running `comprehend`
 twice yields a byte-identical `profile.json`.
 
-## The four questions (the SAME for every format)
+## The five questions (the SAME for every format)
 
-Reasoning over the **structure** in the bundle, answer exactly these four
+Reasoning over the **structure** in the bundle, answer exactly these five
 questions. They are format-neutral: a cover slot is a cover slot, a derived index
 is a derived index, demo content is demo content, whether the file is a Word
 document, a PowerPoint deck, or an Excel workbook.
@@ -81,6 +81,15 @@ document, a PowerPoint deck, or an Excel workbook.
 4. **Which cover slot is which?** For each surfaced cover anchor, which content
    slot fills it (`binds_to`), and should it be filled in place, cleared, or left
    alone (`fill_rule`)? Record it in `cover_slots`.
+5. **Which content shapes recur?** Do the same few primitive blocks repeat as a
+   unit across the template (a callout pattern, a titled card, a standard section
+   opener)? `fragment_candidates` in the bundle hints at recurrences; trust your
+   own reading of the `excerpt` too. For each genuine recurrence, propose a
+   reusable fragment in `fragments`: a `ref`, a `kind` (`component` for a single
+   inline fragment, `section` for a multi-block unit), a `purpose`, and a `blocks`
+   template built ONLY from primitive block types. Put a `{{slot}}` token wherever
+   the text varies per use; the author fills it via the referencing block's
+   `slots`. Propose nothing when no shape genuinely recurs.
 
 ## The anti-overfitting directive (state and obey verbatim)
 
@@ -96,14 +105,14 @@ Concretely, in the comprehension JSON:
   **must be a verbatim id copied from the facts bundle**. If an id is not in the
   surfaced inventory, do not invent it; the merge is fail-closed and will reject
   it (a ref into an empty inventory is itself an error).
-- Only four fields are closed enums, and each maps to a real engine branch:
+- Five fields are closed enums, and each maps to a real engine branch:
   `status` (`present|absent|rejected`), `fill_rule` (`in_place|clear|leave`),
-  `reconcile` (`regenerate|preserve|clear`), `verdict` (`demo|real|mixed`). Use
-  exactly those values.
-- Every other field (`semantic_role`, `kind`, `purpose`, `generation_rules`,
-  `evidence`, region names) is an **open advisory token**. The generator never
-  pattern-matches on it, so write it honestly for a human reader; never bend it
-  to fit a fixed vocabulary.
+  `reconcile` (`regenerate|preserve|clear`), `verdict` (`demo|real|mixed`), and a
+  `fragments` entry's `kind` (`component|section`). Use exactly those values.
+- Every other field (`semantic_role`, an index's `kind`, `purpose`,
+  `generation_rules`, `evidence`, region names) is an **open advisory token**. The
+  generator never pattern-matches on it, so write it honestly for a human reader;
+  never bend it to fit a fixed vocabulary.
 
 ## Worked example (frozen role-ids + non-language placeholders only)
 
@@ -136,7 +145,12 @@ each `<...>` with a verbatim id from your own bundle.
   "demo_classification": {
     "regions": [ { "region_ref": "<region-1>", "verdict": "real",
                    "evidence": "structural content region, not sample text" } ]
-  }
+  },
+  "fragments": [
+    { "ref": "<fragment-1>", "kind": "component", "purpose": "recurring titled note",
+      "blocks": [ { "type": "callout", "intent": "note",
+                    "runs": [ { "t": "{{body}}" } ] } ] }
+  ]
 }
 ```
 
@@ -150,3 +164,10 @@ fields, PPTX can expose an agenda/section-list field when present, and XLSX keep
 model writes only the parts it has ids for; never force a cover, index, or region
 shape onto an empty inventory; a ref into an empty inventory is fail-closed and
 will be rejected.
+
+Reusable fragments are format-neutral too: any format may carry a `fragments`
+proposal, and each lands in the profile's `components` / `sections` registry for
+`generate` to inline. A fragment's `blocks` must be primitive block types (never a
+style, color, or layout), so a proposed fragment resolves through the same brand
+chokepoint as inline content and cannot be off-brand. Propose fragments only when
+a shape genuinely recurs; an empty `fragments` list is the norm.

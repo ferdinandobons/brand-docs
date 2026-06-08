@@ -13,8 +13,15 @@ silently.
 
 from __future__ import annotations
 
+import re
+
 from brandkit.ir.model import IntermediateDocument, block_from_dict
 from brandkit.ir.model import Component, Section
+
+#: A ``{{name}}`` placeholder inside a fragment template's text, filled from the
+#: referencing block's ``slots``. The name is a conservative identifier so it
+#: cannot accidentally swallow real text containing braces.
+_SLOT_TOKEN = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
 
 
 class ComponentExpansionError(ValueError):
@@ -33,12 +40,12 @@ def expand_components(
     :class:`ComponentExpansionError` so the missing fragment is loud, not dropped.
 
     Both IID legs route through here (docx and pptx ``generate`` call this at the
-    top), so a profile-defined fragment expands identically across formats. Scope:
-    this is the STATIC, profile-defined expansion only. Two stories remain DEFERRED
-    milestones and are intentionally out of scope here: (1) auto-POPULATING the
-    registries (extraction / comprehend-time detection of reusable fragments), and
-    (2) ``slots`` PARAMETERIZATION (the block's ``slots`` are not yet substituted
-    into the template - the template is inlined verbatim).
+    top), so a profile-defined fragment expands identically across formats. The
+    referencing block's ``slots`` parameterize the template: a ``{{name}}`` token
+    in the template's text is replaced with ``slots[name]`` (an unfilled token
+    resolves to the empty string, never leaked verbatim). The registries are
+    populated at comprehend time (the model proposes fragments, the merge boundary
+    validates them fail-closed and derives them in); this hook is the consumer.
     """
     components = profile.get("components") or {}
     sections = profile.get("sections") or {}
@@ -56,13 +63,25 @@ def _expand_blocks(blocks, components, sections, *, _depth: int):
         if isinstance(block, Component):
             out.extend(
                 _expand_ref(
-                    block.ref, components, "component", components, sections, _depth
+                    block.ref,
+                    components,
+                    "component",
+                    components,
+                    sections,
+                    _depth,
+                    block.slots,
                 )
             )
         elif isinstance(block, Section):
             out.extend(
                 _expand_ref(
-                    block.ref, sections, "section", components, sections, _depth
+                    block.ref,
+                    sections,
+                    "section",
+                    components,
+                    sections,
+                    _depth,
+                    block.slots,
                 )
             )
         else:
@@ -70,7 +89,7 @@ def _expand_blocks(blocks, components, sections, *, _depth: int):
     return out
 
 
-def _expand_ref(ref, registry, kind, components, sections, depth):
+def _expand_ref(ref, registry, kind, components, sections, depth, slots=None):
     definition = registry.get(ref)
     if definition is None:
         raise ComponentExpansionError(
@@ -79,5 +98,37 @@ def _expand_ref(ref, registry, kind, components, sections, depth):
     raw_blocks = definition.get("blocks")
     if not isinstance(raw_blocks, list):
         raise ComponentExpansionError(f"{kind} {ref!r} has no 'blocks' template")
+    # Slot parameterization: substitute ``{{name}}`` tokens in the template's text
+    # from the referencing block's ``slots``. Done at the dict level (a deep copy),
+    # BEFORE block_from_dict, so it works uniformly for every text-bearing field and
+    # never mutates the shared profile registry. Run ALWAYS (even with no slots) so
+    # an unfilled token resolves to the empty string and is never leaked into the
+    # output as a literal ``{{...}}``.
+    raw_blocks = [_apply_slots(b, slots or {}) for b in raw_blocks]
     sub = [block_from_dict(b) for b in raw_blocks]
     return _expand_blocks(sub, components, sections, _depth=depth + 1)
+
+
+def _apply_slots(value, slots, _depth: int = 0):
+    """Deep-copy ``value`` substituting ``{{name}}`` tokens from ``slots``.
+
+    Strings get token replacement (an unfilled or ``None`` slot -> ``""``, never the
+    literal token or the string ``"None"``); lists/dicts recurse; other scalars pass
+    through. Returns NEW containers so the profile registry the template lives in is
+    never mutated. A depth bound turns a pathologically nested template into a
+    fail-closed error instead of an unhandled ``RecursionError``.
+    """
+    if _depth > 64:
+        raise ComponentExpansionError("slot substitution exceeded max nesting depth")
+    if isinstance(value, str):
+
+        def _sub(match):
+            filled = slots.get(match.group(1))
+            return "" if filled is None else str(filled)
+
+        return _SLOT_TOKEN.sub(_sub, value)
+    if isinstance(value, list):
+        return [_apply_slots(v, slots, _depth + 1) for v in value]
+    if isinstance(value, dict):
+        return {k: _apply_slots(v, slots, _depth + 1) for k, v in value.items()}
+    return value

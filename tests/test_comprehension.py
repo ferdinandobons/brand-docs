@@ -251,6 +251,263 @@ class IdempotencyTest(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+def _comp_with_fragment(kind="component", ref="note_box", blocks=None):
+    """A comprehension proposing one reusable fragment (no inventory refs)."""
+    if blocks is None:
+        blocks = [{"type": "callout", "intent": "note", "runs": [{"t": "{{body}}"}]}]
+    return {
+        "confidence": 0.9,
+        "fragments": [
+            {"ref": ref, "kind": kind, "purpose": "reusable note", "blocks": blocks}
+        ],
+    }
+
+
+class FragmentPopulationTest(unittest.TestCase):
+    """A model-proposed fragment is validated fail-closed and, on a clean merge,
+    DERIVED into the profile's components/sections registry (the milestone:
+    auto-population through the comprehend boundary, no hardcoded catalog)."""
+
+    def test_valid_component_fragment_lands_in_registry(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(prof, _comp_with_fragment())
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(prof["comprehension"]["status"], "present")
+        self.assertIn("note_box", prof["components"])
+        self.assertEqual(prof["components"]["note_box"]["blocks"][0]["type"], "callout")
+        self.assertEqual(prof["components"]["note_box"]["purpose"], "reusable note")
+        # The proposal is also recorded in the canonical comprehension block.
+        self.assertEqual(len(prof["comprehension"]["fragments"]), 1)
+        # Sections registry stays empty (a component proposal only feeds components).
+        self.assertEqual(prof["sections"], {})
+
+    def test_section_fragment_lands_in_sections(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            _comp_with_fragment(
+                kind="section",
+                ref="opener",
+                blocks=[
+                    {"type": "heading", "level": 1, "text": "X"},
+                    {"type": "divider"},
+                ],
+            ),
+        )
+        self.assertTrue(res.ok, res.problems)
+        self.assertIn("opener", prof["sections"])
+        self.assertEqual(prof["components"], {})
+
+    def test_bad_block_type_is_rejected_fail_closed(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(prof, _comp_with_fragment(blocks=[{"type": "bogus"}]))
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["comprehension"]["status"], "rejected")
+        self.assertEqual(prof["components"], {})  # registry left untouched
+        self.assertTrue(any("bogus" in p for p in res.problems), res.problems)
+
+    def test_missing_blocks_is_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(prof, {"fragments": [{"ref": "x", "kind": "component"}]})
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["components"], {})
+        self.assertTrue(any("blocks" in p for p in res.problems), res.problems)
+
+    def test_bad_kind_is_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            {
+                "fragments": [
+                    {"ref": "x", "kind": "widget", "blocks": [{"type": "divider"}]}
+                ]
+            },
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(any("kind" in p for p in res.problems), res.problems)
+
+    def test_dangling_nested_ref_is_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            _comp_with_fragment(
+                kind="section",
+                ref="wrap",
+                blocks=[{"type": "component", "ref": "ghost"}],
+            ),
+        )
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["sections"], {})
+        self.assertTrue(any("ghost" in p for p in res.problems), res.problems)
+
+    def test_nested_ref_to_proposed_fragment_is_allowed(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            {
+                "fragments": [
+                    {
+                        "ref": "leaf",
+                        "kind": "component",
+                        "blocks": [{"type": "paragraph", "text": "x"}],
+                    },
+                    {
+                        "ref": "wrap",
+                        "kind": "section",
+                        "blocks": [{"type": "component", "ref": "leaf"}],
+                    },
+                ]
+            },
+        )
+        self.assertTrue(res.ok, res.problems)
+        self.assertIn("leaf", prof["components"])
+        self.assertIn("wrap", prof["sections"])
+
+    def test_duplicate_ref_is_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            {
+                "fragments": [
+                    {
+                        "ref": "dup",
+                        "kind": "component",
+                        "blocks": [{"type": "divider"}],
+                    },
+                    {
+                        "ref": "dup",
+                        "kind": "component",
+                        "blocks": [{"type": "divider"}],
+                    },
+                ]
+            },
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(any("duplicate" in p for p in res.problems), res.problems)
+
+    def test_fragment_merge_is_idempotent(self):
+        prof_a = _docx_profile_with_inventory()
+        prof_b = _docx_profile_with_inventory()
+        comp_mod.merge(prof_a, _comp_with_fragment())
+        comp_mod.merge(prof_b, _comp_with_fragment())
+        self.assertEqual(
+            json.dumps(prof_a["comprehension"], sort_keys=True),
+            json.dumps(prof_b["comprehension"], sort_keys=True),
+        )
+        self.assertEqual(
+            json.dumps(prof_a["components"], sort_keys=True),
+            json.dumps(prof_b["components"], sort_keys=True),
+        )
+
+    def test_fragmentless_comprehend_leaves_registries_empty(self):
+        # A comprehension with no fragments (the norm) populates nothing.
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(prof, _valid_comp())
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(prof["components"], {})
+        self.assertEqual(prof["sections"], {})
+        self.assertEqual(prof["comprehension"]["fragments"], [])
+
+    def test_input_status_does_not_bypass_fragment_validation(self):
+        # merge DISPOSES status: a model-supplied status='rejected'/'absent' must
+        # NOT short-circuit fragment validation (merge derives the registry
+        # regardless of status), so a bad fragment is still rejected, writing
+        # nothing into the registries.
+        for status in ("rejected", "absent", "present"):
+            prof = _docx_profile_with_inventory()
+            res = comp_mod.merge(
+                prof,
+                {
+                    "status": status,
+                    "fragments": [
+                        {
+                            "ref": "bad",
+                            "kind": "component",
+                            "blocks": [{"type": "BOGUS"}],
+                        }
+                    ],
+                },
+            )
+            self.assertFalse(res.ok, f"status={status} bypassed validation")
+            self.assertEqual(prof["comprehension"]["status"], "rejected")
+            self.assertEqual(prof["components"], {})
+
+    def test_cyclic_fragment_refs_are_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            {
+                "fragments": [
+                    {
+                        "ref": "a",
+                        "kind": "section",
+                        "blocks": [{"type": "section", "ref": "b"}],
+                    },
+                    {
+                        "ref": "b",
+                        "kind": "section",
+                        "blocks": [{"type": "section", "ref": "a"}],
+                    },
+                ]
+            },
+        )
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["sections"], {})
+        self.assertTrue(any("cyclic" in p for p in res.problems), res.problems)
+
+    def test_self_referential_fragment_is_rejected(self):
+        prof = _docx_profile_with_inventory()
+        res = comp_mod.merge(
+            prof,
+            {
+                "fragments": [
+                    {
+                        "ref": "loop",
+                        "kind": "section",
+                        "blocks": [{"type": "section", "ref": "loop"}],
+                    }
+                ]
+            },
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(any("cyclic" in p for p in res.problems), res.problems)
+
+    def test_diamond_dag_of_fragments_is_not_a_false_cycle(self):
+        # A->B, A->C, B->D, C->D is a DAG (no cycle): it must merge clean, proving
+        # the cycle detector does not false-positive on shared descendants.
+        prof = _docx_profile_with_inventory()
+
+        def sec(ref, *refs):
+            return {
+                "ref": ref,
+                "kind": "section",
+                "blocks": [{"type": "section", "ref": r} for r in refs]
+                or [{"type": "divider"}],
+            }
+
+        res = comp_mod.merge(
+            prof,
+            {"fragments": [sec("a", "b", "c"), sec("b", "d"), sec("c", "d"), sec("d")]},
+        )
+        self.assertTrue(res.ok, res.problems)
+        self.assertEqual(set(prof["sections"]), {"a", "b", "c", "d"})
+
+    def test_nested_ref_to_unproposed_existing_entry_is_rejected(self):
+        # The registry is rebuilt from the proposal ALONE, so a nested ref to an
+        # existing-but-not-reproposed entry would be dangling after the rebuild and
+        # is rejected (also keeps the merge outcome a pure function of the input).
+        prof = _docx_profile_with_inventory()
+        prof["components"] = {"pre": {"blocks": [{"type": "divider"}]}}
+        res = comp_mod.merge(
+            prof,
+            _comp_with_fragment(
+                kind="section", ref="wrap", blocks=[{"type": "component", "ref": "pre"}]
+            ),
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(any("pre" in p for p in res.problems), res.problems)
+
+
 class CliComprehendTest(unittest.TestCase):
     def test_comprehend_input_and_comprehend_roundtrip(self):
         import os

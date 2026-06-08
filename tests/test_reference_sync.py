@@ -81,13 +81,15 @@ class SharedComprehensionPromptTest(unittest.TestCase):
         for rid in FROZEN_ROLE_IDS:
             self.assertIn(rid, text)
 
-    def test_four_executor_enums_documented(self) -> None:
+    def test_executor_enums_documented(self) -> None:
         text = _comp_md("brand-docx").read_text(encoding="utf-8")
         for enum_values in (
             "present|absent|rejected",
             "in_place|clear|leave",
             "regenerate|preserve|clear",
             "demo|real|mixed",
+            # The reusable-fragment proposal's closed `kind` enum.
+            "component|section",
         ):
             self.assertIn(enum_values, text)
 

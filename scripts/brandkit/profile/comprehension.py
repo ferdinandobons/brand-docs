@@ -117,6 +117,9 @@ def comprehend_input_bundle(profile: dict, *, excerpt_chars: int = 8000) -> dict
         "structure": profile.get("structure") or {},
         "anchors": profile.get("anchors") or {},
         "styles": _catalog_styles(catalog),
+        # Advisory hints of recurring structures the model MAY turn into reusable
+        # fragments (proposed back via comprehension.fragments). May be empty.
+        "fragment_candidates": _fragment_candidates(kind, catalog),
     }
 
     excerpt = _collect_excerpt(profile, catalog, excerpt_chars)
@@ -142,6 +145,72 @@ def _catalog_styles(catalog: Any) -> dict:
         # reason over the brand's named cell styles.
         return {"named_styles": list(named)}
     return {}
+
+
+def _fragment_candidates(kind: Optional[str], catalog: Any) -> list[dict]:
+    """Advisory, deterministic hints of recurring structures (plan: fragments).
+
+    Derived cheaply from the ALREADY-captured ``artifact_catalog`` (no re-walk of
+    the template, no extractor change). Each hint is ``{"kind", "signal",
+    "evidence"}``; the model may turn a recurrence into a reusable fragment, or
+    ignore it, or propose fragments not listed here. The list is bounded, sorted
+    (deterministic), and frequently EMPTY - it is a nudge, never a binding, and the
+    deterministic path never reads it.
+    """
+    if not isinstance(catalog, dict):
+        return []
+    out: list[dict] = []
+    if kind == "pptx":
+        # A layout that recurs across slides is a natural reusable-section motif.
+        counts: dict[str, int] = {}
+        for slide in catalog.get("slides") or []:
+            if isinstance(slide, dict):
+                layout = slide.get("layout")
+                if isinstance(layout, str) and layout:
+                    counts[layout] = counts.get(layout, 0) + 1
+        for layout in sorted(counts):
+            if counts[layout] >= 2:
+                out.append(
+                    {
+                        "kind": "section",
+                        "signal": f"layout {layout!r} recurs on {counts[layout]} slides",
+                        "evidence": {"layout": layout, "slides": counts[layout]},
+                    }
+                )
+    elif kind == "docx":
+        # A paragraph style that recurs is a candidate single-fragment motif.
+        counts = {}
+        for sample in catalog.get("paragraph_samples") or []:
+            if isinstance(sample, dict):
+                style = sample.get("style")
+                if isinstance(style, str) and style:
+                    counts[style] = counts.get(style, 0) + 1
+        for style in sorted(counts):
+            if counts[style] >= 2:
+                out.append(
+                    {
+                        "kind": "component",
+                        "signal": f"paragraph style {style!r} recurs {counts[style]}x",
+                        "evidence": {"style": style, "count": counts[style]},
+                    }
+                )
+    elif kind == "xlsx":
+        sheets = catalog.get("sheets")
+        if isinstance(sheets, dict):
+            with_tables = sorted(
+                name
+                for name, s in sheets.items()
+                if isinstance(s, dict) and (s.get("tables") or [])
+            )
+            if len(with_tables) >= 2:
+                out.append(
+                    {
+                        "kind": "section",
+                        "signal": f"{len(with_tables)} sheets carry styled tables",
+                        "evidence": {"sheets": with_tables},
+                    }
+                )
+    return out[:12]
 
 
 def _cell_excerpt_text(cell: Any) -> Optional[str]:
@@ -299,6 +368,202 @@ def check_membership(profile: dict, comp: dict) -> list[str]:
     return problems
 
 
+def check_fragments(profile: dict, comp: dict) -> list[str]:
+    """Fail-closed validation of ``comprehension.fragments`` block CONTENTS.
+
+    Shape is checked by ``schema._validate_comp_fragments``; this enforces the
+    fail-closed contract the shape validator deliberately cannot:
+
+      - every fragment block must be parseable by :func:`block_from_dict` (a known
+        IID primitive ``type``); an unparseable block is rejected HERE, at merge,
+        not deferred to the loud-but-late ``expand_components`` failure at generate;
+      - ``(kind, ref)`` must be unique across the proposal (two fragments writing
+        the same registry slot is ambiguous);
+      - a nested ``component``/``section`` block inside a fragment's ``blocks`` must
+        resolve to another proposed fragment of the matching kind or to an existing
+        registry entry, so the populated registry can never carry a dangling ref
+        (which would otherwise hard-fail ``expand_components`` at generate time).
+
+    A fragment block is presentation-free IID (it names intent, never a style /
+    color / layout), so a validated fragment cannot widen the brand guarantee: its
+    blocks resolve through the SAME chokepoint as any inline block.
+
+    Not gated by ``status``: merge derives the registries from the proposal
+    regardless of the incoming status (and forces ``present``), so fragment
+    contents must always be validated. Returns ``[]`` when ``comp`` carries no
+    fragments. (``profile`` is currently unused but kept for signature symmetry
+    with :func:`check_membership` and future cross-binding.)
+    """
+    del profile  # nested refs bind to the proposal alone (single-source rebuild)
+    if not isinstance(comp, dict):
+        return []
+    fragments = comp.get("fragments")
+    if not isinstance(fragments, list) or not fragments:
+        return []
+
+    from brandkit.ir.model import IIDParseError, block_from_dict
+
+    # Nested refs may resolve ONLY to another fragment proposed in THIS
+    # comprehension. merge rebuilds the registries from the proposal alone (the
+    # single source), so a ref to a pre-existing-but-not-reproposed entry would be
+    # dangling after the rebuild, and binding to prior registry state would make
+    # the merge outcome depend on history (non-deterministic for the same input).
+    proposed = {"component": set(), "section": set()}
+    for frag in fragments:
+        if isinstance(frag, dict):
+            kind = frag.get("kind")
+            ref = frag.get("ref")
+            if kind in proposed and isinstance(ref, str) and ref:
+                proposed[kind].add(ref)
+
+    problems: list[str] = []
+    seen: set[tuple] = set()
+    graph: dict[tuple, set] = {}
+    for i, frag in enumerate(fragments):
+        if not isinstance(frag, dict):
+            continue  # shape validator already flags
+        path = f"comprehension.fragments[{i}]"
+        kind = frag.get("kind")
+        ref = frag.get("ref")
+        src = None
+        if kind in proposed and isinstance(ref, str) and ref:
+            key = (kind, ref)
+            if key in seen:
+                problems.append(f"{path}: duplicate {kind} ref {ref!r}")
+            seen.add(key)
+            src = key
+            graph.setdefault(src, set())
+        blocks = frag.get("blocks")
+        if not isinstance(blocks, list):
+            continue  # shape validator already flags
+        for j, block in enumerate(blocks):
+            bpath = f"{path}.blocks[{j}]"
+            if not isinstance(block, dict):
+                problems.append(f"{bpath}: must be a block object")
+                continue
+            btype = block.get("type")
+            if btype in ("component", "section"):
+                nref = block.get("ref")
+                if not isinstance(nref, str) or nref not in proposed.get(btype, set()):
+                    problems.append(
+                        f"{bpath}: nested {btype} ref {nref!r} is not defined by "
+                        f"another fragment proposed in this comprehension"
+                    )
+                elif src is not None:
+                    graph[src].add((btype, nref))
+                continue
+            try:
+                block_from_dict(block)
+            except IIDParseError as exc:
+                problems.append(f"{bpath}: {exc}")
+
+    # A cyclic fragment reference can never expand to primitives; reject it at the
+    # merge (the single writer) rather than letting it fail loud-but-late at the
+    # generate-time depth guard.
+    cycle = _detect_fragment_cycle(graph)
+    if cycle:
+        problems.append(
+            "comprehension.fragments: cyclic fragment reference involving "
+            f"{sorted(str(node) for node in cycle)}"
+        )
+    return problems
+
+
+def _detect_fragment_cycle(graph: dict) -> set:
+    """Return the nodes on a cycle in the proposed-fragment ref graph (or empty).
+
+    Nodes are ``(kind, ref)``; edges are nested component/section refs (only edges
+    into proposed nodes are recorded, so every edge target is itself a graph key).
+    Implemented as an ITERATIVE colored DFS so an adversarially huge cycle can never
+    overflow the Python recursion limit (it returns ``MergeResult(ok=False)`` rather
+    than raising), mirroring the bounded ``_apply_slots`` guard.
+    """
+    white, gray, black = 0, 1, 2
+    color: dict = {}
+    for root in graph:
+        if color.get(root, white) != white:
+            continue
+        color[root] = gray
+        stack = [(root, iter(graph.get(root, ())))]
+        while stack:
+            node, it = stack[-1]
+            advanced = False
+            for nxt in it:
+                cv = color.get(nxt, white)
+                if cv == gray:
+                    # Back-edge: nxt is on the active DFS path -> report the cycle.
+                    path = [n for n, _ in stack]
+                    return set(path[path.index(nxt) :]) if nxt in path else {nxt}
+                if cv == white and nxt in graph:
+                    color[nxt] = gray
+                    stack.append((nxt, iter(graph.get(nxt, ()))))
+                    advanced = True
+                    break
+            if not advanced:
+                color[node] = black
+                stack.pop()
+    return set()
+
+
+def _canonical_blocks(blocks: Any) -> list:
+    """Round-trip each block through the IID parser so the stored template is
+    canonical, presentation-free, free of unknown/dead fields, and INDEPENDENT (no
+    mutable refs shared with the proposal or the canonical comprehension block).
+
+    Only called after :func:`check_fragments` has confirmed parseability; the
+    defensive fallback deep-copies an unexpectedly-unparseable block rather than
+    aliasing it.
+    """
+    import copy
+
+    from brandkit.ir.model import IIDParseError, block_from_dict
+
+    out: list = []
+    for b in blocks if isinstance(blocks, list) else []:
+        try:
+            out.append(block_from_dict(b).to_dict())
+        except IIDParseError:
+            out.append(copy.deepcopy(b))
+    return out
+
+
+def _derive_fragment_registries(comp: dict) -> tuple[dict, dict]:
+    """Derive ``(components, sections)`` registries from ``comprehension.fragments``.
+
+    Each well-shaped fragment becomes a registry entry ``{'blocks': [...],
+    'purpose'?}`` keyed by ``ref``; built with sorted refs for stable, idempotent
+    serialization, and with blocks round-tripped to canonical IID. Only called on a
+    CLEAN merge, so every fragment is already validated. Malformed entries (should
+    be none here) are skipped defensively.
+    """
+    components: dict = {}
+    sections: dict = {}
+    frags = comp.get("fragments")
+    if not isinstance(frags, list):
+        return components, sections
+    by_kind: dict[str, list[tuple[str, dict]]] = {"component": [], "section": []}
+    for frag in frags:
+        if not isinstance(frag, dict):
+            continue
+        kind = frag.get("kind")
+        ref = frag.get("ref")
+        blocks = frag.get("blocks")
+        if kind not in by_kind or not isinstance(ref, str) or not ref:
+            continue
+        if not isinstance(blocks, list):
+            continue
+        entry: dict = {"blocks": _canonical_blocks(blocks)}
+        purpose = frag.get("purpose")
+        if isinstance(purpose, str) and purpose:
+            entry["purpose"] = purpose
+        by_kind[kind].append((ref, entry))
+    for ref, entry in sorted(by_kind["component"], key=lambda kv: kv[0]):
+        components[ref] = entry
+    for ref, entry in sorted(by_kind["section"], key=lambda kv: kv[0]):
+        sections[ref] = entry
+    return components, sections
+
+
 # ---------------------------------------------------------------------------
 # Merge (the only writer)
 # ---------------------------------------------------------------------------
@@ -348,12 +613,22 @@ def merge(
     # carries this comprehension, so the same shape rules apply as on load.
     trial = dict(profile)
     trial_comp = dict(comp)
-    trial_comp.setdefault("status", schema.ComprehensionStatus.PRESENT.value)
+    # merge DISPOSES status: a model-supplied status is never trusted (it would
+    # otherwise let a status='rejected'/'absent' input short-circuit the
+    # membership / fragment checks while merge still derives the registries). Force
+    # the trial to PRESENT so every load-bearing validation always runs.
+    trial_comp["status"] = schema.ComprehensionStatus.PRESENT.value
     trial["comprehension"] = trial_comp
     problems = list(schema.validate(trial))
 
     # 2) Fail-closed membership of every load-bearing ref.
     problems.extend(check_membership(profile, trial_comp))
+
+    # 2b) Fail-closed validation of any reusable-fragment proposals (block
+    # parseability, ref uniqueness, nested-ref resolution). Part of the SAME
+    # all-or-nothing transaction: a bad fragment rejects the whole comprehension
+    # and writes nothing into the registries.
+    problems.extend(check_fragments(profile, trial_comp))
 
     if problems:
         # Refuse to write the understanding; record the rejection + findings.
@@ -377,6 +652,16 @@ def merge(
     _derive_role_usage(profile, canonical)
     _derive_skeleton_attrs(profile, canonical)
     _derive_anchors(profile, canonical)
+
+    # 4b) Derive the reusable-fragment registries from the canonical fragments.
+    # comprehend OWNS components/sections: they are rebuilt deterministically from
+    # the (single-source) comprehension on every clean merge, so a re-merge of the
+    # same proposal yields byte-identical registries (idempotency), and a proposal
+    # with no fragments resets them to empty. A fragment is presentation-free IID,
+    # so this can never widen the brand guarantee.
+    components, sections = _derive_fragment_registries(canonical)
+    profile["components"] = components
+    profile["sections"] = sections
 
     return MergeResult(True, schema.ComprehensionStatus.PRESENT.value, [])
 
@@ -433,6 +718,30 @@ def _canonicalize(
             (dict(r) for r in regions), key=lambda d: str(d.get("region_ref"))
         )
     }
+
+    # fragments: sorted by (kind, ref) for a stable, idempotent serialization.
+    frags = [f for f in (comp.get("fragments") or []) if isinstance(f, dict)]
+    out["fragments"] = sorted(
+        (_canonical_fragment(f) for f in frags),
+        key=lambda d: (str(d.get("kind")), str(d.get("ref"))),
+    )
+    return out
+
+
+def _canonical_fragment(frag: dict) -> dict:
+    """Return a canonical reusable-fragment proposal entry (stable key order).
+
+    Blocks are round-tripped to canonical IID (independent of the derived registry
+    copy, so neither aliases the other).
+    """
+    out: dict = {
+        "ref": frag.get("ref"),
+        "kind": frag.get("kind"),
+        "blocks": _canonical_blocks(frag.get("blocks")),
+    }
+    purpose = frag.get("purpose")
+    if isinstance(purpose, str) and purpose:
+        out["purpose"] = purpose
     return out
 
 

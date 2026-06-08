@@ -93,7 +93,7 @@ python scripts/brandkit/cli.py extract --name <brand> --template <template.pptx>
 ## Internal Comprehend (optional, model-driven)
 
 Read [reference/comprehension.md](reference/comprehension.md) for the full
-guidance, the four questions, and the anti-overfitting directive. In short:
+guidance, the five questions, and the anti-overfitting directive. In short:
 
 ```bash
 python scripts/brandkit/cli.py comprehend-input --name <brand>   # prints {facts, excerpt} for the model

@@ -211,8 +211,10 @@ def main(argv: list[str] | None = None) -> int:
             (loaded.profile["comprehension"].get("conventions") or {}).get("indexes")
             or []
         )
+        n_frag = len(loaded.profile["comprehension"].get("fragments") or [])
         print(
-            f"comprehended {args.name}: {n_slots} cover slot(s), {n_idx} index convention(s) [present]"
+            f"comprehended {args.name}: {n_slots} cover slot(s), "
+            f"{n_idx} index convention(s), {n_frag} fragment(s) [present]"
         )
         return 0
     if args.cmd == "list":
