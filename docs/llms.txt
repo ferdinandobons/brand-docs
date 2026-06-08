@@ -39,6 +39,6 @@ extracting a reusable Brand Profile and verifying that output stays on brand.
 ## Important pages
 
 - GitHub repository: https://github.com/ferdinandobons/brand-docs
-- Plugin workflow: https://github.com/ferdinandobons/brand-docs/blob/main/docs/PLUGIN_WORKFLOW.md
+- Plugin workflow: https://github.com/ferdinandobons/brand-docs/blob/main/documentation/PLUGIN_WORKFLOW.md
 - README: https://github.com/ferdinandobons/brand-docs#readme
-- Directory submission guide: https://github.com/ferdinandobons/brand-docs/blob/main/docs/DIRECTORY_SUBMISSIONS.md
+- Directory submission guide: https://github.com/ferdinandobons/brand-docs/blob/main/documentation/DIRECTORY_SUBMISSIONS.md
