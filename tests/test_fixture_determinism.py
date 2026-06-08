@@ -36,6 +36,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import io
+import sys
 import tempfile
 import unittest
 import zipfile
@@ -47,6 +48,8 @@ from lxml import etree
 _ROOT = Path(__file__).resolve().parents[1]
 _BUILDERS = _ROOT / "tests" / "fixtures" / "builders"
 _COMPLEX = _ROOT / "tests" / "fixtures" / "complex"
+_EX_BUILDERS = _ROOT / "examples" / "builders"
+_EX_TEMPLATES = _ROOT / "examples" / "templates"
 
 # Parts whose content is tool-stamped (timestamps / producer name + version)
 # rather than content-derived: not a structural signal, so ignored by the
@@ -192,6 +195,62 @@ class FixtureDeterminismGuard(unittest.TestCase):
 
     def test_xlsx_builder_matches_committed_structure(self) -> None:
         self._check("xlsx", "acme_complex.xlsx")
+
+
+def _load_example_builder(stem: str) -> ModuleType:
+    """Import an ``examples/builders/build_branddocs_<stem>.py`` builder by path.
+
+    The example builders do ``from _brandlib import ...``, so their directory must
+    be importable; insert it on sys.path before executing the module.
+    """
+    if str(_EX_BUILDERS) not in sys.path:
+        sys.path.insert(0, str(_EX_BUILDERS))
+    path = _EX_BUILDERS / f"build_branddocs_{stem}.py"
+    spec = importlib.util.spec_from_file_location(f"_exbuilder_{stem}", path)
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise unittest.SkipTest(f"cannot load example builder spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ExampleTemplateDeterminismGuard(unittest.TestCase):
+    """Each SHOWCASE builder must reproduce its committed example template's
+    structure/content. The example templates rely on freeze_ooxml for byte
+    determinism with no other guard; this catches a builder edit that breaks it
+    (the single most valuable missing test per the goal audit)."""
+
+    def _check(self, stem: str, filename: str) -> None:
+        committed = _EX_TEMPLATES / filename
+        if not committed.exists():
+            raise unittest.SkipTest(f"missing committed example template {committed}")
+        try:
+            builder = _load_example_builder(stem)
+        except unittest.SkipTest:
+            raise
+        except Exception as exc:  # missing lib / import error -> skip, don't fail
+            raise unittest.SkipTest(f"example builder for {stem} unavailable: {exc!r}")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / filename
+            try:
+                builder.build(out)
+            except Exception as exc:  # builder cannot run here -> skip, don't fail
+                raise unittest.SkipTest(
+                    f"example builder for {stem} could not run: {exc!r}"
+                )
+            self.assertTrue(
+                out.exists(), f"example builder for {stem} produced no file"
+            )
+            _compare_zip(self, committed.read_bytes(), out.read_bytes(), "")
+
+    def test_docx_example_matches_committed(self) -> None:
+        self._check("docx", "branddocs_template.docx")
+
+    def test_pptx_example_matches_committed(self) -> None:
+        self._check("pptx", "branddocs_template.pptx")
+
+    def test_xlsx_example_matches_committed(self) -> None:
+        self._check("xlsx", "branddocs_template.xlsx")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ The templates are 100% synthetic BrandDocs showcases; no proprietary file is use
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -241,6 +242,27 @@ class DocxKitchenSink(_Base):
             )
             # Genuinely-deferred native writers still degrade loudly (never silently).
             self.assertTrue({"chart", "smartart"} <= degraded)
+            # Output fidelity on the SHOWCASE profile (different brand style names than
+            # the synthetic fixture): lists carry real numbering and the table carries
+            # the brand table style, so role nomination is exercised end-to-end.
+            self.assertIn("numpr", body_xml, "list numbering (w:numPr) missing")
+            self.assertIn("tblstyle", body_xml, "brand table style missing")
+
+    def test_generate_is_byte_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            a, b = td / "a.docx", td / "b.docx"
+            docx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(KITCHEN), a
+            )
+            docx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(KITCHEN), b
+            )
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
 
 
 class PptxKitchenSink(_Base):
@@ -342,6 +364,22 @@ class PptxKitchenSink(_Base):
                 [f.message for f in report.findings if f.severity == "ERROR"],
             )
 
+    def test_generate_is_byte_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            a, b = td / "a.pptx", td / "b.pptx"
+            pptx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(KITCHEN), a
+            )
+            pptx_generate.generate(
+                loaded.profile, loaded.shell_path, parse_idoc(KITCHEN), b
+            )
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
+
 
 class XlsxKitchenSink(_Base):
     KIND = "xlsx"
@@ -385,6 +423,19 @@ class XlsxKitchenSink(_Base):
             )
             errors = [f.message for f in report.findings if f.severity == "ERROR"]
             self.assertEqual(errors, [], errors)
+
+    def test_generate_is_byte_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            grid = GridDocument(cells={}, regions={})
+            a, b = td / "a.xlsx", td / "b.xlsx"
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, a)
+            xlsx_generate.generate(loaded.profile, loaded.shell_path, grid, b)
+            self.assertEqual(
+                hashlib.sha256(a.read_bytes()).hexdigest(),
+                hashlib.sha256(b.read_bytes()).hexdigest(),
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

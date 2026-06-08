@@ -441,6 +441,38 @@ def _compose_cover_comprehended(
     return cleared
 
 
+def _unplaced_cover_extras(cover: Cover) -> list[str]:
+    """Authored cover slots the deterministic (single-title) fill cannot place.
+
+    The deterministic path fills only the title; a subtitle or extra ``fields`` the
+    author supplied would otherwise vanish with no trace. Returns the slot names so
+    the caller can surface them (the comprehension path places them in full)."""
+    extras: list[str] = []
+    subtitle = textutil.runs_to_text(cover.subtitle or []) or str(
+        cover.fields.get("subtitle", "")
+    )
+    if subtitle:
+        extras.append("subtitle")
+    for key, val in (cover.fields or {}).items():
+        if key not in ("title", "subtitle") and val:
+            extras.append(key)
+    return extras
+
+
+def _note_unplaced_cover_extras(sink: list, extras: list[str]) -> None:
+    """INFO (not silent) when the deterministic fill leaves authored slots unplaced."""
+    if extras:
+        sink.append(
+            Finding(
+                "cover_degraded",
+                schema.Severity.INFO.value,
+                "deterministic cover fill placed only the title; authored cover "
+                f"slot(s) not placed: {', '.join(extras)} "
+                "(comprehension fills the multi-slot cover in place)",
+            )
+        )
+
+
 def _compose_cover_deterministic(
     doc, cover: Cover, profile: dict, sink: list
 ) -> set[str]:
@@ -450,11 +482,13 @@ def _compose_cover_deterministic(
     )
     if not title:
         return set()
+    extras = _unplaced_cover_extras(cover)
 
     # 1) Block-level SDT cover title.
     for sdt in _iter_block_sdts(doc):
         if _sdt_is_title(sdt) and _fill_sdt_title(sdt, title):
             _apply_role_style_sdt(doc, sdt, profile, "cover.title")
+            _note_unplaced_cover_extras(sink, extras)
             return set()
 
     # 2) Placeholder paragraph - overwrite only the matching run's text in place.
@@ -462,6 +496,7 @@ def _compose_cover_deterministic(
         if PLACEHOLDER_TITLE in para.text or "Insert title" in para.text:
             _fill_paragraph_in_place(para, title)
             _apply_role_style(doc, para, profile, "cover.title")
+            _note_unplaced_cover_extras(sink, extras)
             return set()
 
     # 3) No cover anchor: append a title paragraph but place it on the cover, i.e.
