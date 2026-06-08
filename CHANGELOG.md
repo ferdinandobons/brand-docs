@@ -4,8 +4,37 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-08
+
+Model-driven reusable-fragment population completes the comprehension vertical,
+plus native SmartArt and PowerPoint cell merges. Brand Profiles from 0.1.x-0.3.0
+keep working unchanged; an absent comprehension is still the deterministic path.
+
 ### Added
 
+- The reusable-fragment registries (`components` / `sections`) are now
+  **populated by the model through the fail-closed `comprehend` boundary** - no
+  hardcoded catalog. A `comprehend` proposal may carry a `fragments` list (each
+  `{ref, kind: component|section, purpose?, blocks}`); `merge` validates it
+  fail-closed (every block parses as a known IID primitive; a nested
+  `component`/`section` ref must resolve to another fragment proposed in the same
+  comprehension; `(kind, ref)` is unique; cyclic references are rejected) and, on
+  a clean pass, DERIVES the entries into `profile['components']`/`['sections']` -
+  the registries `expand_components` already inlines. The registries are rebuilt
+  deterministically from the (single-source) comprehension on every clean merge,
+  so re-comprehending the same proposal is byte-idempotent and a fragment-less
+  comprehension leaves them empty. A fragment is presentation-free IID, so a
+  validated proposal resolves through the same brand chokepoint as inline content
+  and cannot widen the brand guarantee. The `comprehend-input` bundle now surfaces
+  advisory `fragment_candidates` (recurring layouts/styles derived cheaply from
+  the existing `artifact_catalog`, possibly empty) as a hint; the model does the
+  semantic detection. The shared comprehension prompt gains a fifth question + a
+  worked example, byte-identical across the three skills.
+- Fragment **`slots` are now substituted**: a `{{name}}` token in a fragment's
+  template text is filled from the referencing `component`/`section` block's
+  `slots` at expansion time (an unfilled or null token resolves to the empty
+  string and is never leaked). Substitution deep-copies, so it never mutates the
+  shared profile registry.
 - PowerPoint tables now honor `colspan`/`rowspan`: a spanning cell (e.g. a banner
   across columns) merges the covered grid cells in the native table, matching the
   docx table writer. Previously pptx rendered a full ungrouped grid while docx
@@ -175,5 +204,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.4.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.4.0
+[0.3.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.3.0
 [0.2.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.2.0
 [0.1.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.1.0
