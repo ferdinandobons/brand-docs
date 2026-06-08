@@ -52,7 +52,10 @@ from openpyxl.formatting.rule import (
     ColorScaleRule,
     DataBarRule,
     FormulaRule,
+    IconSetRule,
+    Rule,
 )
+from openpyxl.styles.differential import DifferentialStyle
 from openpyxl.styles import (
     Alignment,
     Border,
@@ -317,6 +320,25 @@ def _build_model(wb: Workbook) -> None:
         "F4:F6",
         FormulaRule(formula=["F4<0"], fill=PatternFill("solid", fgColor="FFFFC7CE")),
     )
+    # Two more common CF families (icon set + top-N), so the CF inventory the model
+    # reads covers iconSet/top10 too, not just colorScale/cellIs/expression/dataBar.
+    ws.conditional_formatting.add(
+        "G4:G6",
+        IconSetRule(icon_style="3TrafficLights1", type="percent", values=[0, 33, 67]),
+    )
+    ws.conditional_formatting.add(
+        "B4:E6",
+        Rule(
+            type="top10",
+            rank=3,
+            dxf=DifferentialStyle(fill=PatternFill("solid", fgColor="FF63BE7B")),
+        ),
+    )
+    # Negative line items (Discounts/Returns) use a red-negative accounting mask -
+    # a distinct surfaced number format, on existing cells (no geometry change).
+    for r in (5, 6):
+        for col in range(2, 7):
+            ws.cell(row=r, column=col).number_format = "#,##0;[Red](#,##0)"
     ws.freeze_panes = "B4"
     # Wider label column, tighter numeric columns so the table + chart fit a page.
     ws.column_dimensions["A"].width = 16
