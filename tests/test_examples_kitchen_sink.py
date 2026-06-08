@@ -270,18 +270,25 @@ class PptxKitchenSink(_Base):
     EXTRACT = pptx_extract
     GENERATE = pptx_generate
 
-    def test_kitchen_sink_generates_and_degrades_loudly(self):
+    def test_kitchen_sink_generates_native_kpi_image_and_degrades_loudly(self):
+        import copy
+
+        from PIL import Image as PILImage
+        from pptx import Presentation
+
         with tempfile.TemporaryDirectory() as t:
             td = Path(t)
             loaded = self._extract(td)
+            png = td / "fig.png"
+            PILImage.new("RGB", (40, 20), (10, 30, 60)).save(png)
+            data = copy.deepcopy(KITCHEN)
+            for b in data["blocks"]:
+                if b.get("type") == "image":
+                    b["src"] = str(png)
             out = td / "out.pptx"
             sink = []
             pptx_generate.generate(
-                loaded.profile,
-                loaded.shell_path,
-                parse_idoc(KITCHEN),
-                out,
-                findings=sink,
+                loaded.profile, loaded.shell_path, parse_idoc(data), out, findings=sink
             )
             self.assertTrue(out.is_file())
             report = run_qa(
@@ -297,8 +304,24 @@ class PptxKitchenSink(_Base):
                 [f.message for f in report.findings if f.severity == "ERROR"],
             )
             degraded = _degraded_kinds(sink)
-            # Deferred native writers degrade loudly, never silently.
-            self.assertTrue({"kpi", "chart", "smartart", "image"} <= degraded)
+            # KPI (native table) and Image (native picture from a real src) no longer
+            # degrade; chart/smartart still have no native writer and degrade loudly.
+            self.assertEqual(
+                degraded & {"kpi", "image"},
+                set(),
+                f"kpi/image should be native now: {degraded}",
+            )
+            self.assertTrue({"chart", "smartart"} <= degraded)
+            # A picture shape and a (KPI) table shape are actually authored.
+            prs = Presentation(out)
+            has_pic = any(
+                sh.shape_type == 13
+                for s in prs.slides
+                for sh in s.shapes  # PICTURE
+            )
+            has_tbl = any(sh.has_table for s in prs.slides for sh in s.shapes)
+            self.assertTrue(has_pic, "native picture not placed")
+            self.assertTrue(has_tbl, "native KPI/table shape not placed")
 
     def test_reconcile_path_no_duplicate_parts(self):
         # Reconcile/comprehension path against the SHOWCASE deck: clearing a demo

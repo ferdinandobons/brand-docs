@@ -38,13 +38,14 @@ Design (off-brand-by-construction, §C3/M6/M7, plan §6 reconcile-not-rebuild):
     ``indent`` (the IR list level) survives the capacity split and is applied to the
     written paragraph.
 
-Native PPTX tables (``graphicFrame``/``a:tbl`` via ``shapes.add_table``) are
-authored as real table objects. Charts (``c:chart`` via ``shapes.add_chart``),
-SmartArt, KPI and images are still flattened to body text, but each flattening
-records a ``block_degraded`` WARNING (symmetric with the docx vertical) so a deck
-that loses a native object is visible in QA rather than silently down-rendered. A
-component-survival check (shell-vs-output native counts) backs the same guarantee
-from the QA side.
+Native PPTX objects: tables (``graphicFrame``/``a:tbl`` via ``shapes.add_table``),
+KPI groups (authored as a native brand table, one row per metric), and images
+(``shapes.add_picture`` from an external ``src``, sized to the body placeholder; an
+unresolved source degrades loudly, never crashes). Charts (``c:chart``) and SmartArt
+are still flattened to body text; each such flattening records a ``block_degraded``
+WARNING (symmetric with the docx vertical) so a deck that loses a native object is
+visible in QA rather than silently down-rendered. A component-survival check
+(shell-vs-output native counts) backs the same guarantee from the QA side.
 """
 
 from __future__ import annotations
@@ -107,6 +108,7 @@ class SlideChunk:
 
     lines: list[BodyLine]
     table: Optional[ir.Table] = None
+    image: Optional[ir.Image] = None
 
 
 def generate(
@@ -557,6 +559,9 @@ def _append_content_slides(
             if chunk.table is not None:
                 _clear_body_placeholder(body)
                 _add_native_table(slide, prs, chunk.table, body)
+            elif chunk.image is not None:
+                _clear_body_placeholder(body)
+                _add_native_picture(slide, prs, chunk.image, body, sink)
             elif body is not None and chunk.lines:
                 _write_body_lines(body, chunk.lines)
 
@@ -579,10 +584,62 @@ def _content_chunks(blocks: list, capacity: int, sink: list) -> list[SlideChunk]
         if isinstance(block, ir.Table):
             flush_pending()
             chunks.append(SlideChunk(lines=[], table=block))
+        elif isinstance(block, ir.Kpi):
+            # KPI -> a native brand table (label / bold value / optional delta),
+            # the same faithful rendering as the docx vertical.
+            flush_pending()
+            kpi_table = _kpi_to_table(block)
+            if kpi_table is not None:
+                chunks.append(SlideChunk(lines=[], table=kpi_table))
+            else:
+                _degrade(sink, "kpi", note="had no items; skipped")
+        elif isinstance(block, ir.Image):
+            flush_pending()
+            chunks.append(SlideChunk(lines=[], image=block))
         else:
             pending.append(block)
     flush_pending()
     return chunks or [SlideChunk(lines=[])]
+
+
+def _kpi_to_table(block: ir.Kpi) -> Optional[ir.Table]:
+    """Build a brand table (one row per metric) from a KPI block, value bolded."""
+    items = block.items or []
+    if not items:
+        return None
+    has_delta = any(getattr(k, "delta", None) for k in items)
+    rows = []
+    for k in items:
+        cells = [
+            ir.TableCell(runs=textutil.normalize_runs(k.label or "")),
+            ir.TableCell(runs=[{"t": str(k.value or ""), "b": True}]),
+        ]
+        if has_delta:
+            cells.append(ir.TableCell(runs=textutil.normalize_runs(k.delta or "")))
+        rows.append(cells)
+    return ir.Table(columns=[], rows=rows, role="default")
+
+
+def _add_native_picture(slide, prs, image: ir.Image, body_placeholder, sink) -> None:
+    """Place an ``ir.Image`` as a real picture shape in the body placeholder bounds.
+
+    Only an external ``src`` file is placed natively; an unresolved ``src``/``asset``
+    degrades to a loud ``block_degraded`` WARNING (never a crash or a silent drop).
+    Sized to the body width (python-pptx scales height to preserve aspect); placement
+    is the layout's body affordance, not a fabricated coordinate. No brand literal."""
+    src = image.src
+    if not (src and Path(src).is_file()):
+        _degrade(
+            sink, "image", note="not placed in pptx (src/asset source unavailable)"
+        )
+        return
+    left, top, width, _height = _table_bounds(prs, body_placeholder)
+    try:
+        slide.shapes.add_picture(src, left, top, width=width)
+    except Exception:
+        _degrade(
+            sink, "image", note="not placed in pptx (image decode/placement failed)"
+        )
 
 
 def _clear_body_placeholder(body) -> None:
