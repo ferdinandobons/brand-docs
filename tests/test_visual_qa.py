@@ -1122,6 +1122,37 @@ class GateWiringTest(unittest.TestCase):
             self.assertTrue(any("Quick Look" in w for w in warnings))
             self.assertTrue(any("soffice convert failed" in e for e in errors))
 
+    def test_render_to_pngs_degrades_when_soffice_fails_and_quicklook_absent(
+        self,
+    ) -> None:
+        # soffice convert fails AND qlmanage is absent -> no pages, with both reasons
+        # surfaced as render errors (never a crash, never a stale/bogus frame).
+        def fake_which(name):
+            return f"/fake/{name}" if name == "soffice" else None  # no qlmanage
+
+        def fake_run(args, *unused_args, **unused_kwargs):
+            return SimpleNamespace(returncode=134, stdout=b"", stderr=b"abort trap")
+
+        with (
+            patch.object(subprocess, "run", fake_run),
+            patch.object(vqa.shutil, "which", fake_which),
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                td = Path(td)
+                target = td / "out.docx"
+                out_dir = td / "out.visual"
+                _real_docx(target)
+                errors: list[str] = []
+                pngs = vqa.render_to_pngs(
+                    target,
+                    out_dir,
+                    check_available=False,
+                    render_errors=errors,
+                    render_warnings=[],
+                )
+            self.assertEqual(pngs, [])
+            self.assertTrue(any("qlmanage not found" in e for e in errors), errors)
+
     def test_run_qa_deep_injected_visual(self) -> None:
         """Drive ``deep`` without soffice via the ``visual=`` injection hook."""
         with tempfile.TemporaryDirectory() as td:

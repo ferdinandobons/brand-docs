@@ -399,6 +399,34 @@ class NumberFormatRoleTest(unittest.TestCase):
             problems = schema.validate(loaded.profile)
             self.assertTrue(any("number_format" in p for p in problems), problems)
 
+    def test_qa_gate_rejects_fabricated_mask_against_shell(self) -> None:
+        # The shell-backed peer of the schema check: check_resolver_targets opens the
+        # shell and ERRORs on a number_format mask the workbook does not actually use.
+        from brandkit.qa import checks_deterministic as cd
+
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td, self._build_shell(td))
+            # A legit (extracted) mask passes the shell-backed check.
+            clean = cd.check_resolver_targets(loaded.shell_path, loaded.profile)
+            self.assertFalse(
+                any(f.check == "resolver_targets_exist" for f in clean), clean
+            )
+            # A fabricated mask is caught at the gate too.
+            loaded.profile["roles"]["number.currency"]["resolver"]["number_format"] = (
+                "FABRICATED"
+            )
+            findings = cd.check_resolver_targets(loaded.shell_path, loaded.profile)
+            self.assertTrue(
+                any(
+                    f.check == "resolver_targets_exist"
+                    and f.severity == "ERROR"
+                    and "FABRICATED" in f.message
+                    for f in findings
+                ),
+                [f.message for f in findings],
+            )
+
     def test_number_format_generation_is_idempotent(self) -> None:
         import hashlib
 

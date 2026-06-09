@@ -195,6 +195,25 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
                         f"role {rid!r} named range {name!r} not found in shell (have {sorted(defined)})",
                     )
                 )
+            # number_format roles must resolve to a mask the shell ACTUALLY uses
+            # (the engine never fabricates a format) - the shell-backed peer of the
+            # schema's intra-profile number_format consistency check.
+            masks = _xlsx_number_format_masks(shell)
+            for rid in role_ids:
+                resolver = (roles.get(rid) or {}).get("resolver") or {}
+                if resolver.get("type") != schema.ResolverType.NUMBER_FORMAT.value:
+                    continue
+                mask = resolver.get("number_format")
+                if mask is None or mask in masks:
+                    continue
+                findings.append(
+                    Finding(
+                        "resolver_targets_exist",
+                        schema.Severity.ERROR.value,
+                        f"role {rid!r} number format {mask!r} not among the shell's "
+                        "used formats",
+                    )
+                )
     except Exception as exc:  # opening the shell must never crash the gate
         findings.append(
             Finding(
@@ -231,6 +250,24 @@ def _xlsx_defined_names(shell) -> set:
     except AttributeError:
         # Older openpyxl exposes defined_names as a list-like of DefinedName.
         return {dn.name for dn in wb.defined_names}
+
+
+def _xlsx_number_format_masks(shell) -> set:
+    """The distinct number-format masks the workbook actually uses (``General`` dropped).
+
+    Mirrors ``xlsx_structure.inventory_number_formats`` as a set, kept local so the
+    QA layer needs no format-module import; iterates ``_cells`` (sparse-safe).
+    """
+    wb = load_workbook(shell, data_only=False)
+    masks: set = set()
+    for ws in wb.worksheets:
+        for cell in ws._cells.values():
+            if cell.value is None:
+                continue
+            fmt = cell.number_format
+            if fmt and fmt != "General":
+                masks.add(fmt)
+    return masks
 
 
 # ---------------------------------------------------------------------------

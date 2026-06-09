@@ -430,6 +430,28 @@ class UnhandledBlockTest(unittest.TestCase):
         d.save(shell)
         return shell
 
+    def test_table_without_a_table_role_surfaces_style_fallback(self):
+        # A profile with NO table role renders the table with the default style
+        # rather than silently: an INFO style_fallback makes the missing brand
+        # style visible in QA (the content still renders).
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = self._shell(Path(td))
+            out = Path(td) / "out.docx"
+            prof = _docx_profile({"_index": []})  # no roles at all
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Table.from_dict({"columns": ["A", "B"], "rows": [["1", "2"]]})
+                ]
+            )
+            findings: list[Finding] = []
+            docx_generate.generate(prof, shell, idoc, out, findings=findings)
+            self.assertTrue(out.is_file())  # still renders
+            fallback = [f for f in findings if f.check == "style_fallback"]
+            self.assertTrue(fallback, [f.check for f in findings])
+            self.assertTrue(all(f.severity == "INFO" for f in fallback))
+
     def test_unhandled_block_emits_no_empty_paragraph_and_records_finding(self):
         import tempfile
 

@@ -804,10 +804,22 @@ def _as_cell(col):
     return ir.TableCell(runs=runs)
 
 
-def _apply_style(doc, target_obj, op, findings: list[Finding], *, label: str) -> None:
+def _apply_style(
+    doc,
+    target_obj,
+    op,
+    findings: list[Finding],
+    *,
+    label: str,
+    expect_style: bool = False,
+) -> None:
     """Apply a resolved role's style to a paragraph OR a table (both expose
     ``.style``). A role that names a resolver but resolves to no shell style is a
     brand breach: be LOUD (ERROR) instead of silently leaving the default style.
+    When ``expect_style`` is set (a block family that should carry a dedicated brand
+    style, e.g. a table), a STUB resolver - the profile has no such role at all - is
+    surfaced as an INFO ``style_fallback`` (the block still renders, with the default
+    style) so the missing brand style is visible in QA rather than silently dropped.
     The single implementation behind ``_apply_resolved_style`` / ``_apply_table_style``."""
     style = lookup_style(doc, op.resolver)
     if style is not None:
@@ -823,6 +835,15 @@ def _apply_style(doc, target_obj, op, findings: list[Finding], *, label: str) ->
                 "which is not in the shell",
             )
         )
+    elif expect_style:
+        findings.append(
+            Finding(
+                "style_fallback",
+                schema.Severity.INFO.value,
+                f"{label}block rendered with the default style: this profile has no "
+                f"{label.strip() or 'matching'} role to brand it",
+            )
+        )
 
 
 def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:
@@ -830,4 +851,4 @@ def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:
 
 
 def _apply_table_style(doc, table, op, findings: list[Finding]) -> None:
-    _apply_style(doc, table, op, findings, label="table ")
+    _apply_style(doc, table, op, findings, label="table ", expect_style=True)
