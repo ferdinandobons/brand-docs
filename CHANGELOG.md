@@ -6,6 +6,35 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **List / numbering-definition fidelity is now a captured brand axis (DOCX only, Cluster
+  D3).** The same dominant-capture + appearance-seam + fail-closed-check pattern that ships
+  for font/size/color/geometry/table now also covers a generated list's NUMBERING facts, so
+  a generated list looks like the template's lists: per level, the `w:numFmt` field code
+  (decimal / bullet / lowerLetter / ...), the `w:lvlText` level format string (e.g. `"%1."`
+  or a bullet glyph), and the level `w:ind` indentation. This completes Cluster D
+  (D1 + D2 + D3).
+  - **Capture** reads the per-level facts VERBATIM off the shell's OWN `w:abstractNum` for
+    the numbering id each list role already references (resolved `numId -> abstractNumId`),
+    storing them additively under `role.appearance.numbering` (the referenced `num_id` /
+    `abstract_num_id` plus a `per_level_facts` map). Only the levels the template declares
+    are recorded; nothing is hardcoded to any template.
+  - **Apply** flows through the single resolver/appearance seam (`op.appearance.numbering`):
+    the generator REFERENCES the shell's numbering by id (the existing `w:numPr`), ensures
+    the referenced `w:abstractNum` is present (CLONING the shell's own definition by id when
+    needed - never minting a new one), then re-asserts each per-level numFmt / lvlText /
+    indent SET-ONLY-WHEN-UNSET so an authored value is never clobbered and re-runs stay
+    byte-identical. The engine NEVER synthesizes a numbering definition from JSON. A
+    no-numbering profile generates byte-identically (the frozen anchor stays green).
+  - **Verify** adds `check_numbering_targets` (gate-wired as `appearance_numbering_targets`),
+    the honest fail-closed peer: every referenced `num_id` / `abstract_num_id` must be one
+    the shell's numbering part DEFINES (SYMBOLIC membership, like the table-style ref); every
+    per-level numFmt must be a valid OOXML field code (SHAPE, a closed enum); and every
+    per-level lvlText / indent must be byte-identical to the shell's OWN abstractNum for that
+    level (OBSERVED-FLOOR, like geometry). An undefined id / malformed numFmt / un-observed
+    lvlText / out-of-range or un-observed indent is an ERROR.
+  - **Still DOCX-only:** pptx/xlsx never capture or apply numbering (`w:abstractNum` /
+    `w:num` are WordprocessingML constructs with no peer in scope here); their output is
+    untouched. Schema stays 1.2.0 (additive).
 - **Table-style fidelity is now a captured brand axis (DOCX only, Cluster D2).** The
   same dominant-capture + appearance-seam + fail-closed-check pattern that ships for
   font/size/color/geometry now also covers a generated table's CONDITIONAL-FORMAT facts,

@@ -386,6 +386,14 @@ the end of generation**, invites **text or screenshot** feedback, and improves
 
 ### Cluster D - Deeper template-following (fidelity below typography)
 
+> **Status: D1 + D2 + D3 SHIPPED (DOCX-only).** Paragraph geometry, table-style
+> conditional formats, and list/numbering definitions are now the 4th/5th/6th captured
+> appearance axes, each riding the single resolver/appearance seam (NO family gate),
+> applied set-only-when-unset, and verified by an honest fail-closed check
+> (`check_geometry_targets` / `check_table_targets` / `check_numbering_targets`, gate-wired).
+> Schema stays 1.2.0 (additive); pptx/xlsx are untouched (these are WordprocessingML-only
+> constructs). The frozen anchor stays green (no-capture profiles generate byte-identically).
+
 Extend the proven dominant-capture + resolver-chokepoint + fail-closed-check pattern
 to new axes. Cross-format only once Cluster A's apply layer exists; on docx alone
 they can ship independently.
@@ -394,7 +402,7 @@ they can ship independently.
 |---|---|---|---|---|---|
 | **D1** *(shipped; tabs deferred)* | Paragraph geometry as a new appearance axis | capture+apply spacing / indent / `w:pBdr` / `w:shd` per role under the same `_dominant` floor (tabs `w:tabs` deferred - same independent-axis pattern when wanted) | `capture_fonts` model; `role.appearance.geometry` + `theme.geometry.body`; `_merge_appearance` (NO family gate - role geometry is intentional) ; `check_geometry_targets` (shape + observed-floor membership, not name-membership) | M | reads only this template's `w:pPr` twips/borders; keeps a value only when it dominates |
 | **D2** *(shipped)* | Table-style fidelity (banding / `tblLook` / cell margins) | enable the template's own `w:tblStylePr` banding + first/last emphasis via the captured `tblLook` bitmask; KPI-as-table inherits free | docx table writer; `role.appearance.table` + `theme.table.body`; `_merge_appearance` (NO family gate) ; `check_table_targets` (gate-wired `appearance_table_targets`: `tblLook` shape + table-style name-membership + cell-margin observed-floor) | **S** | reads conditional-format facts the template declares; fills stay in the shell's style part |
-| **D3** | List/numbering definition fidelity | capture per-level numFmt / lvlText / indent; clone the shell's own `w:abstractNum` by id | `structure.py` numbering readers; `role.appearance.numbering`; `check_numbering_targets` | M | clones the numbering def this template references, by id; never synthesized from JSON |
+| **D3** *(shipped)* | List/numbering definition fidelity | capture per-level numFmt / lvlText / indent; clone the shell's own `w:abstractNum` by id | `structure.py` numbering readers; `role.appearance.numbering` + `theme.numbering.body`; `_merge_appearance` (NO family gate) ; `check_numbering_targets` (gate-wired `appearance_numbering_targets`: num-id / abstract-num-id membership + numFmt shape + lvlText/indent observed-floor) | M | clones the numbering def this template references, by id; never synthesized from JSON |
 
 ### Cluster E - Faithfulness robustness (close known dead-ends)
 

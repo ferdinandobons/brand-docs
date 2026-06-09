@@ -116,6 +116,35 @@ class DocxRoleNominationTest(unittest.TestCase):
         self.assertEqual(str(bullet["resolver"].get("num_id")), "1")
         self.assertEqual(str(number["resolver"].get("num_id")), "3")
 
+    def test_d3_numbering_facts_captured_per_list_role(self):
+        # D3: each list role carries appearance.numbering with the referenced num_id /
+        # abstract_num_id and the shell's OWN per-level numFmt / lvlText / indent facts.
+        bullet = (self.roles["list.bullet.1"].get("appearance") or {}).get("numbering")
+        self.assertIsNotNone(bullet, "list.bullet.1 appearance.numbering not captured")
+        self.assertEqual(str(bullet["num_id"]), "1")
+        self.assertEqual(str(bullet["abstract_num_id"]), "0")
+        # The profile is loaded from JSON, so per_level_facts keys are STRINGS (the apply
+        # and check layers coerce with int()).
+        per = bullet["per_level_facts"]
+        # abstractNum 0 is a TWO-level bullet: both declared levels are captured.
+        self.assertEqual(per["0"]["numFmt"], "bullet")
+        self.assertEqual(per["1"]["numFmt"], "bullet")
+        # lvlText is captured VERBATIM (a bullet glyph, kept byte-for-byte).
+        self.assertIn("lvlText", per["0"])
+        self.assertEqual(per["0"]["indent"]["left"], 720)
+        self.assertEqual(per["1"]["indent"]["left"], 1440)
+
+        number = (self.roles["list.number.1"].get("appearance") or {}).get("numbering")
+        self.assertIsNotNone(number, "list.number.1 appearance.numbering not captured")
+        self.assertEqual(str(number["abstract_num_id"]), "1")
+        self.assertEqual(number["per_level_facts"]["0"]["numFmt"], "decimal")
+        self.assertEqual(number["per_level_facts"]["0"]["lvlText"], "%1.")
+
+    def test_d3_numbering_axis_absent_when_no_list_numbering(self):
+        # A non-list role (paragraph) never carries appearance.numbering.
+        para = self.roles.get("paragraph") or {}
+        self.assertNotIn("numbering", para.get("appearance") or {})
+
     def test_list_role_is_not_the_normal_floor(self):
         # The old 'Normal as list' floor must NOT be used when a real list style
         # exists - list.bullet.1 must not resolve to the body 'Normal' style.
@@ -541,6 +570,147 @@ class DocxTableD2FidelityTest(unittest.TestCase):
                     for f in report.findings
                 )
             )
+
+
+@unittest.skipUnless(_COMPLEX_DOCX.exists(), "complex docx fixture missing")
+class DocxNumberingD3FidelityTest(unittest.TestCase):
+    """D3: the template's own per-level numbering facts (numFmt / lvlText / indent) are
+    captured and re-asserted onto the output's cloned w:abstractNum set-only-when-unset;
+    the numbering DEFINITION stays the shell's (referenced/cloned by id, never minted)."""
+
+    def _generate(self, idoc, td) -> Document:
+        prof = _extract_profile(td)
+        out = Path(td) / "out.docx"
+        docx_generate.generate(prof, _COMPLEX_DOCX, idoc, out)
+        return Document(out)
+
+    def _list_idoc(self):
+        return ir.IntermediateDocument(
+            blocks=[
+                ir.ListBlock(
+                    ordered=False,
+                    items=[
+                        ir.ListItem(
+                            runs=[{"t": "Top bullet"}],
+                            level=0,
+                            items=[ir.ListItem(runs=[{"t": "Nested bullet"}], level=1)],
+                        )
+                    ],
+                ),
+                ir.ListBlock(
+                    ordered=True,
+                    items=[ir.ListItem(runs=[{"t": "Step one"}], level=0)],
+                ),
+            ]
+        )
+
+    def _abstract_level(self, doc, abstract_num_id, ilvl):
+        """The ``w:lvl`` element of ``abstract_num_id`` at ``ilvl`` in ``doc``'s
+        numbering part, or None."""
+        root = docx_structure._numbering_root(doc)
+        for an in root.findall(w("abstractNum")):
+            if an.get(w("abstractNumId")) == str(abstract_num_id):
+                for lvl in an.findall(w("lvl")):
+                    if (lvl.get(w("ilvl")) or "0") == str(ilvl):
+                        return lvl
+        return None
+
+    def test_referenced_abstractnum_is_present_in_output(self):
+        # The generated list references the shell's num_id; the shell's own w:abstractNum
+        # (0 for bullets, 1 for decimals) is present in the output's numbering part.
+        with tempfile.TemporaryDirectory() as td:
+            gen = self._generate(self._list_idoc(), td)
+            root = docx_structure._numbering_root(gen)
+            ids = {an.get(w("abstractNumId")) for an in root.findall(w("abstractNum"))}
+            self.assertIn("0", ids)
+            self.assertIn("1", ids)
+
+    def test_per_level_facts_match_template_on_output(self):
+        # The output's w:abstractNum carries the template's OWN per-level numFmt /
+        # lvlText / indent (re-asserted set-only-when-unset onto the cloned def).
+        with tempfile.TemporaryDirectory() as td:
+            shell = Document(_COMPLEX_DOCX)
+            gen = self._generate(self._list_idoc(), td)
+            # bullet abstractNum 0, level 0: numFmt/lvlText/indent equal the shell's.
+            for aid, ilvl in (("0", 0), ("0", 1), ("1", 0)):
+                shell_lvl = self._abstract_level(shell, aid, ilvl)
+                out_lvl = self._abstract_level(gen, aid, ilvl)
+                self.assertIsNotNone(out_lvl, f"abstract {aid} level {ilvl} missing")
+                for tag in ("numFmt", "lvlText"):
+                    s = shell_lvl.find(w(tag))
+                    o = out_lvl.find(w(tag))
+                    if s is not None:
+                        self.assertEqual(
+                            o.get(w("val")), s.get(w("val")), f"{aid}.{ilvl} {tag}"
+                        )
+
+    def test_lists_render_with_template_numbering(self):
+        # The generated list paragraphs reference the template's numId, and the abstractNum
+        # those ids resolve to carries the template's numFmt (bullet vs decimal).
+        with tempfile.TemporaryDirectory() as td:
+            gen = self._generate(self._list_idoc(), td)
+            by_text = {p.text: p for p in gen.paragraphs if p.text}
+            nid_b, _ = _num_pr(by_text["Top bullet"])
+            self.assertEqual(nid_b, "1")
+            self.assertEqual(docx_structure.num_family_for(gen, nid_b, 0), "bullet")
+            nid_n, _ = _num_pr(by_text["Step one"])
+            self.assertEqual(nid_n, "3")
+            self.assertEqual(docx_structure.num_family_for(gen, nid_n, 0), "number")
+
+    def test_numbering_generation_is_idempotent(self):
+        # Re-generating the same content twice yields byte-identical output (the per-level
+        # re-assert is set-only-when-unset, so a second run never re-touches the def).
+        with tempfile.TemporaryDirectory() as td:
+            prof = _extract_profile(td)
+            idoc = self._list_idoc()
+            o1 = Path(td) / "o1.docx"
+            o2 = Path(td) / "o2.docx"
+            docx_generate.generate(prof, _COMPLEX_DOCX, idoc, o1)
+            docx_generate.generate(prof, _COMPLEX_DOCX, idoc, o2)
+            self.assertEqual(
+                hashlib.sha256(o1.read_bytes()).hexdigest(),
+                hashlib.sha256(o2.read_bytes()).hexdigest(),
+            )
+
+    def test_end_to_end_gate_has_no_numbering_error(self):
+        from brandkit.qa import gate
+
+        with tempfile.TemporaryDirectory() as td:
+            prof = _extract_profile(td)
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, _COMPLEX_DOCX, self._list_idoc(), out)
+            report = gate.run_qa(out, prof, shell=_COMPLEX_DOCX)
+            self.assertFalse(
+                any(
+                    f.check == "appearance_numbering_targets"
+                    and f.severity == schema.Severity.ERROR.value
+                    for f in report.findings
+                ),
+                [
+                    f.message
+                    for f in report.findings
+                    if f.check == "appearance_numbering_targets"
+                ],
+            )
+
+    def test_set_only_when_unset_does_not_clobber_authored_level(self):
+        # Manually edit the output's abstractNum to carry a DIFFERENT (authored) lvlText on
+        # bullet level 0, then re-generate the same content onto that edited package: the
+        # authored value must survive (the per-level re-assert is set-only-when-unset).
+        with tempfile.TemporaryDirectory() as td:
+            prof = _extract_profile(td)
+            stage = Path(td) / "stage.docx"
+            docx_generate.generate(prof, _COMPLEX_DOCX, self._list_idoc(), stage)
+            d = Document(stage)
+            lvl = self._abstract_level(d, "0", 0)
+            lt = lvl.find(w("lvlText"))
+            lt.set(w("val"), "AUTHORED")
+            d.save(stage)
+            # Re-generate onto the EDITED package (use it as the shell).
+            out = Path(td) / "out.docx"
+            docx_generate.generate(prof, stage, self._list_idoc(), out)
+            out_lvl = self._abstract_level(Document(out), "0", 0)
+            self.assertEqual(out_lvl.find(w("lvlText")).get(w("val")), "AUTHORED")
 
 
 if __name__ == "__main__":

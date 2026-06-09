@@ -160,6 +160,23 @@ def op_table(op) -> Optional[dict]:
     return (getattr(op, "appearance", None) or {}).get("table")
 
 
+def op_numbering(op) -> Optional[dict]:
+    """The captured brand list NUMBERING facts this resolved op applies (Cluster D3,
+    docx-only), or ``None``.
+
+    Read STRICTLY from ``op.appearance.numbering`` (resolver-populated from the profile,
+    role-specific numbering winning over the body numbering default; NO family gate). The
+    dict carries the referenced ``num_id`` and ``abstract_num_id`` (SYMBOLIC refs into the
+    shell's numbering part) and the shell's OWN ``per_level_facts`` (``{ilvl -> {numFmt,
+    lvlText, indent}}``) - facts the docx list writer re-asserts onto the cloned
+    ``w:abstractNum`` set-only-when-unset (the definition itself stays the shell's). The
+    docx list writer (``_apply_list_numbering_appearance``) is the ONLY consumer; there is
+    deliberately NO backend protocol method, so the shared run/geometry orchestration is
+    untouched and pptx/xlsx never see this axis. ``None`` for every profile that carries no
+    captured numbering, so the no-numbering path is a byte-identical no-op."""
+    return (getattr(op, "appearance", None) or {}).get("numbering")
+
+
 def resolve_run_color(
     resolver,
     token: Optional[str],

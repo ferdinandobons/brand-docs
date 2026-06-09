@@ -915,6 +915,144 @@ def style_num_binding(style) -> Optional[tuple[str, int]]:
 
 
 # ---------------------------------------------------------------------------
+# Per-level numbering FACTS capture (Cluster D3, DOCX-ONLY).
+#
+# These readers surface the per-level facts a list role re-applies so a generated
+# list looks like the template's lists: the ``w:numFmt`` field code (the closed enum
+# decimal / bullet / lowerLetter / ...), the ``w:lvlText`` level format string (e.g.
+# ``"%1."`` or a bullet glyph), and the level's ``w:ind`` indentation (twips). Every
+# value is read VERBATIM off the shell's OWN ``w:abstractNum/w:lvl``: the engine never
+# synthesizes a numFmt/lvlText/indent - it can only REFERENCE the shell's numbering by
+# id and at most CLONE an existing ``w:abstractNum`` (see ``generate``). A level the
+# abstractNum does not declare is simply absent (it inherits per OOXML at render time);
+# this reader records ONLY the declared levels. Brand-agnostic and crash-safe.
+# ---------------------------------------------------------------------------
+# The four ``w:ind`` indentation attributes captured per level (twips). Each is an
+# INDEPENDENT key, absent when the level does not declare it (so apply re-asserts only
+# the indents the template actually carried).
+_NUM_INDENT_ATTRS: tuple[str, ...] = ("left", "right", "firstLine", "hanging")
+
+
+def _lvl_indent_facts(lvl) -> dict:
+    """``{attr: int}`` for every ``w:lvl/w:pPr/w:ind`` twips attribute the level declares.
+
+    Reads the level's own ``w:pPr/w:ind`` (``left`` / ``right`` / ``firstLine`` /
+    ``hanging``) as twips. A missing element/attribute or a malformed (non-integer)
+    value contributes nothing to that axis (fail-soft, like geometry capture)."""
+    out: dict = {}
+    if lvl is None:
+        return out
+    ppr = lvl.find(w("pPr"))
+    if ppr is None:
+        return out
+    ind = ppr.find(w("ind"))
+    if ind is None:
+        return out
+    for attr in _NUM_INDENT_ATTRS:
+        val = ind.get(w(attr))
+        if val is None:
+            continue
+        try:
+            out[attr] = int(val)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _abstract_num_per_level_facts(root, abstract_num_id: str) -> dict[int, dict]:
+    """Map ``ilvl -> {numFmt, lvlText, indent}`` for one ``w:abstractNum``, or ``{}``.
+
+    Reads ``w:abstractNum[@w:abstractNumId=abstract_num_id]/w:lvl[@w:ilvl]`` and, per
+    declared level, surfaces:
+
+      - ``numFmt``: the ``w:numFmt@w:val`` field code (the closed enum; absent when the
+        level declares none);
+      - ``lvlText``: the ``w:lvlText@w:val`` level format string VERBATIM (kept
+        byte-for-byte, including an empty bullet string - no normalization);
+      - ``indent``: the per-level ``w:ind`` twips (:func:`_lvl_indent_facts`).
+
+    Each fact is recorded only when the level declares it; an absent fact is simply
+    omitted. Returns ``{}`` when ``abstract_num_id`` does not exist in the numbering
+    part (so a caller skips rather than guesses). Crash-safe / brand-agnostic."""
+    out: dict[int, dict] = {}
+    if root is None or abstract_num_id is None:
+        return out
+    target = None
+    for an in root.findall(w("abstractNum")):
+        if an.get(w("abstractNumId")) == str(abstract_num_id):
+            target = an
+            break
+    if target is None:
+        return out
+    for lvl in target.findall(w("lvl")):
+        try:
+            ilvl = int(lvl.get(w("ilvl")) or 0)
+        except (TypeError, ValueError):
+            continue
+        facts: dict = {}
+        nf = lvl.find(w("numFmt"))
+        if nf is not None and nf.get(w("val")) is not None:
+            facts["numFmt"] = nf.get(w("val"))
+        lt = lvl.find(w("lvlText"))
+        if lt is not None and lt.get(w("val")) is not None:
+            facts["lvlText"] = lt.get(w("val"))
+        indent = _lvl_indent_facts(lvl)
+        if indent:
+            facts["indent"] = indent
+        if facts:
+            out[ilvl] = facts
+    return out
+
+
+def num_per_level_facts(doc, num_id: str) -> Optional[dict]:
+    """Resolve a ``w:numId`` to its captured per-level numbering facts, or ``None``.
+
+    Resolves ``numId -> abstractNumId`` (via :func:`_num_to_abstract`) then reads the
+    abstractNum's per-level facts (:func:`_abstract_num_per_level_facts`). Returns a dict
+    with:
+
+      - ``num_id``: the referenced ``w:numId`` (str, a SYMBOLIC reference the generator
+        re-asserts verbatim - never invented);
+      - ``abstract_num_id``: the resolved ``w:abstractNumId`` (str, the def the generator
+        clones by id when the output needs it present);
+      - ``per_level_facts``: ``{ilvl -> {numFmt, lvlText, indent}}`` (the declared levels
+        only).
+
+    Returns ``None`` when the numbering part is absent, the id is undefined, or the
+    abstractNum declares no per-level fact at all (so a role with no captured numbering
+    leaves ``appearance.numbering`` absent - the byte-identical no-capture path)."""
+    root = _numbering_root(doc)
+    if root is None or num_id is None:
+        return None
+    aid = _num_to_abstract(root).get(str(num_id))
+    if aid is None:
+        return None
+    per_level = _abstract_num_per_level_facts(root, aid)
+    if not per_level:
+        return None
+    return {
+        "num_id": str(num_id),
+        "abstract_num_id": str(aid),
+        "per_level_facts": per_level,
+    }
+
+
+def clone_abstract_num(root, abstract_num_id: str):
+    """A DEEP COPY of the shell's ``w:abstractNum[@w:abstractNumId=abstract_num_id]``
+    element, or ``None`` when the numbering part has no such definition.
+
+    The copy is VERBATIM (``copy.deepcopy`` of the live element): the engine clones the
+    shell's own definition by id, never minting a new one. Used by the generator to
+    ensure a referenced abstractNum is present in the output's numbering part."""
+    if root is None or abstract_num_id is None:
+        return None
+    for an in root.findall(w("abstractNum")):
+        if an.get(w("abstractNumId")) == str(abstract_num_id):
+            return copy.deepcopy(an)
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Demo-region detection (purely structural; NO hardcoded marker phrases).
 # ---------------------------------------------------------------------------
 def detect_demo_region(doc) -> dict:

@@ -1218,6 +1218,350 @@ def check_table_targets(shell, profile: dict) -> list[Finding]:
     return findings
 
 
+# ---------------------------------------------------------------------------
+# Cluster D3: LIST / NUMBERING definition targets (DOCX-ONLY).
+# The honest fail-closed peer of check_geometry_targets / check_table_targets for the
+# numbering axis. The numbering DEFINITION (w:abstractNum / w:num) is OWNED BY THE SHELL:
+# the engine only REFERENCES it by id and at most CLONES the shell's own w:abstractNum -
+# it NEVER synthesizes a numFmt / lvlText / indent from JSON. This check proves:
+#   (1) num_id membership: the referenced w:numId is in the shell's w:num inventory;
+#   (2) abstract_num_id membership: the resolved w:abstractNumId is in the shell's
+#       w:abstractNum inventory (the def the engine clones by id);
+#   (3) numFmt SHAPE: the per-level numFmt is a valid OOXML field code (closed enum);
+#   (4) lvlText OBSERVED-FLOOR: the per-level lvlText byte-matches the shell's OWN
+#       w:lvlText for that ilvl in the referenced abstractNum (never synthesized);
+#   (5) indent OBSERVED-FLOOR: each per-level indent twip is an int in the OOXML range
+#       AND byte-matches the shell's OWN w:ind value for that ilvl (never synthesized).
+# Fail-closed: any undefined id / malformed numFmt / un-observed lvlText / out-of-range or
+# un-observed indent is ERROR. A no-op for non-docx kinds and pre-D3 profiles.
+# ---------------------------------------------------------------------------
+
+# The closed set of OOXML ``w:numFmt@w:val`` field codes (ECMA-376 ST_NumberFormat). A
+# captured numFmt MUST be one of these (SHAPE-only; the floor proper is the lvlText/indent
+# observed-floor). This is a spec-fixed enum, NOT a template-derived inventory.
+_NUMFMT_VALID_CODES: frozenset[str] = frozenset(
+    {
+        "decimal",
+        "upperRoman",
+        "lowerRoman",
+        "upperLetter",
+        "lowerLetter",
+        "ordinal",
+        "cardinalText",
+        "ordinalText",
+        "hex",
+        "chicago",
+        "ideographDigital",
+        "japaneseCounting",
+        "aiueo",
+        "iroha",
+        "decimalFullWidth",
+        "decimalHalfWidth",
+        "japaneseLegal",
+        "japaneseDigitalTenThousand",
+        "decimalEnclosedCircle",
+        "decimalFullWidth2",
+        "aiueoFullWidth",
+        "irohaFullWidth",
+        "decimalZero",
+        "bullet",
+        "ganada",
+        "chosung",
+        "decimalEnclosedFullstop",
+        "decimalEnclosedParen",
+        "decimalEnclosedCircleChinese",
+        "ideographEnclosedCircle",
+        "ideographTraditional",
+        "ideographZodiac",
+        "ideographZodiacTraditional",
+        "taiwaneseCounting",
+        "ideographLegalTraditional",
+        "taiwaneseCountingThousand",
+        "taiwaneseDigital",
+        "chineseCounting",
+        "chineseLegalSimplified",
+        "chineseCountingThousand",
+        "koreanDigital",
+        "koreanCounting",
+        "koreanLegal",
+        "koreanDigital2",
+        "vietnameseCounting",
+        "russianLower",
+        "russianUpper",
+        "none",
+        "numberInDash",
+        "hebrew1",
+        "hebrew2",
+        "arabicAlpha",
+        "arabicAbjad",
+        "hindiVowels",
+        "hindiConsonants",
+        "hindiNumbers",
+        "hindiCounting",
+        "thaiLetters",
+        "thaiNumbers",
+        "thaiCounting",
+        "bahtText",
+        "dollarText",
+        "custom",
+    }
+)
+# The per-level indent attributes the check validates (mirrors the capture reader).
+_NUM_INDENT_ATTRS: tuple[str, ...] = ("left", "right", "firstLine", "hanging")
+
+
+class ShellNumberingFacts(NamedTuple):
+    """The numbering facts a docx shell proves it carries, the membership inventory +
+    observed floor an applied numbering value is validated against:
+
+      - ``num_ids``: the ``@w:numId`` of every ``w:num`` the shell declares (the symbolic
+        reference a captured ``num_id`` must be a member of);
+      - ``abstract_num_ids``: the ``@w:abstractNumId`` of every ``w:abstractNum`` the
+        shell declares (the def a captured ``abstract_num_id`` must be a member of);
+      - ``per_level``: ``{abstract_num_id -> {ilvl -> {lvlText, indent}}}`` of the shell's
+        OWN declared per-level ``w:lvlText`` / ``w:ind`` facts (the observed floor).
+    """
+
+    num_ids: set
+    abstract_num_ids: set
+    per_level: dict
+
+
+def _docx_collect_numbering_facts(shell) -> ShellNumberingFacts:
+    """Read the docx shell's OWN numbering facts from ``word/numbering.xml``: the w:num /
+    w:abstractNum id inventories and the per-level lvlText/indent observed floor. A
+    missing/garbage numbering part yields empty inventories - the caller then fails closed
+    on every applied numbering value (a referenced id can never be a member of {})."""
+    num_ids: set = set()
+    abstract_num_ids: set = set()
+    per_level: dict = {}
+    try:
+        xml = pack.read_part(shell, "word/numbering.xml")
+    except KeyError:
+        return ShellNumberingFacts(
+            num_ids=num_ids, abstract_num_ids=abstract_num_ids, per_level=per_level
+        )
+    root = pack.parse_xml_bytes(xml)
+    for num in root.findall(_W("num")):
+        nid = num.get(_W("numId"))
+        if nid is not None:
+            num_ids.add(str(nid))
+    for an in root.findall(_W("abstractNum")):
+        aid = an.get(_W("abstractNumId"))
+        if aid is None:
+            continue
+        aid = str(aid)
+        abstract_num_ids.add(aid)
+        levels: dict = {}
+        for lvl in an.findall(_W("lvl")):
+            try:
+                ilvl = int(lvl.get(_W("ilvl")) or 0)
+            except (TypeError, ValueError):
+                continue
+            facts: dict = {}
+            lt = lvl.find(_W("lvlText"))
+            if lt is not None and lt.get(_W("val")) is not None:
+                facts["lvlText"] = lt.get(_W("val"))
+            ppr = lvl.find(_W("pPr"))
+            ind = ppr.find(_W("ind")) if ppr is not None else None
+            if ind is not None:
+                indent: dict = {}
+                for attr in _NUM_INDENT_ATTRS:
+                    val = ind.get(_W(attr))
+                    if val is None:
+                        continue
+                    try:
+                        indent[attr] = int(val)
+                    except (TypeError, ValueError):
+                        continue
+                if indent:
+                    facts["indent"] = indent
+            levels[ilvl] = facts
+        per_level[aid] = levels
+    return ShellNumberingFacts(
+        num_ids=num_ids, abstract_num_ids=abstract_num_ids, per_level=per_level
+    )
+
+
+def _collect_applied_numbering(profile: dict) -> list:
+    """Gather every ``(where, numbering-dict)`` the engine will APPLY: each role's
+    ``appearance.numbering`` and the document body numbering default
+    (``theme.numbering.body``). Sorted by ``where`` for a deterministic finding order."""
+    applied: list = []
+    for rid, entry in (profile.get("roles") or {}).items():
+        if rid == "_index" or not isinstance(entry, dict):
+            continue
+        numbering = (entry.get("appearance") or {}).get("numbering")
+        if isinstance(numbering, dict) and numbering:
+            applied.append((f"role {rid!r}", numbering))
+    body = ((profile.get("theme") or {}).get("numbering") or {}).get("body")
+    if isinstance(body, dict) and body:
+        applied.append(("theme.numbering.body", body))
+    applied.sort(key=lambda item: item[0])
+    return applied
+
+
+def check_numbering_targets(shell, profile: dict) -> list[Finding]:
+    """Verify every LIST / NUMBERING value the engine will APPLY is shell-backed - the
+    honest fail-closed peer of :func:`check_geometry_targets` / :func:`check_table_targets`
+    for the numbering axis (Cluster D3, DOCX-ONLY). The numbering DEFINITION is owned by
+    the shell; the engine only REFERENCES it by id and CLONES the shell's own
+    ``w:abstractNum``. It validates:
+
+      - NUM-ID MEMBERSHIP: the referenced ``num_id`` is a ``w:num`` the shell declares.
+      - ABSTRACT-NUM-ID MEMBERSHIP: the resolved ``abstract_num_id`` is a ``w:abstractNum``
+        the shell declares (the def the engine clones by id).
+      - numFmt SHAPE: each per-level ``numFmt`` is a valid OOXML field code (closed enum;
+        SHAPE only - the field code is spec-fixed, not template-derived).
+      - lvlText OBSERVED-FLOOR: each per-level ``lvlText`` byte-matches the shell's OWN
+        ``w:lvlText`` for that ilvl in the referenced abstractNum (never synthesized).
+      - indent OBSERVED-FLOOR: each per-level indent twip is an int in the OOXML range AND
+        byte-matches the shell's OWN ``w:ind`` value for that ilvl (never synthesized).
+
+    Fail-closed: an undefined id / malformed numFmt / un-observed lvlText / malformed or
+    un-observed indent is ERROR. A no-op when the kind is not docx, the shell is absent, or
+    no numbering is captured (every pre-D3 profile). A shell that cannot be parsed fails
+    CLOSED (a WARNING plus empty inventories, so every applied value is then rejected)."""
+    if shell is None or profile.get("kind") != schema.Kind.DOCX.value:
+        return []
+    applied = _collect_applied_numbering(profile)
+    if not applied:
+        return []
+    findings: list[Finding] = []
+    try:
+        facts = _docx_collect_numbering_facts(shell)
+    except Exception as exc:  # opening the shell must never crash the gate
+        findings.append(
+            Finding(
+                "appearance_numbering_targets",
+                schema.Severity.WARNING.value,
+                f"could not verify numbering targets against shell: {exc}",
+            )
+        )
+        facts = ShellNumberingFacts(num_ids=set(), abstract_num_ids=set(), per_level={})
+
+    def _err(where: str, msg: str) -> None:
+        findings.append(
+            Finding(
+                "appearance_numbering_targets",
+                schema.Severity.ERROR.value,
+                msg,
+                location=where,
+            )
+        )
+
+    for where, numbering in applied:
+        # (1) num_id: SYMBOLIC membership against the shell's w:num inventory.
+        num_id = numbering.get("num_id")
+        if num_id is None or not str(num_id):
+            _err(
+                where,
+                f"{where} numbering num_id {num_id!r} is not a numbering reference",
+            )
+        elif str(num_id) not in facts.num_ids:
+            _err(
+                where,
+                f"{where} numbering num_id {num_id!r} is not a w:num the shell defines "
+                f"(have {sorted(facts.num_ids)})",
+            )
+        # (2) abstract_num_id: SYMBOLIC membership against the shell's w:abstractNum.
+        abstract_num_id = numbering.get("abstract_num_id")
+        if abstract_num_id is None or not str(abstract_num_id):
+            _err(
+                where,
+                f"{where} numbering abstract_num_id {abstract_num_id!r} is not a "
+                "numbering-definition reference",
+            )
+            continue  # without a resolvable def, the per-level floor cannot be checked
+        if str(abstract_num_id) not in facts.abstract_num_ids:
+            _err(
+                where,
+                f"{where} numbering abstract_num_id {abstract_num_id!r} is not a "
+                f"w:abstractNum the shell defines (have {sorted(facts.abstract_num_ids)})",
+            )
+            continue
+        shell_levels = facts.per_level.get(str(abstract_num_id), {})
+        # (3)-(5) per-level facts: numFmt shape, lvlText + indent observed-floor.
+        per_level = numbering.get("per_level_facts") or {}
+        if not isinstance(per_level, dict):
+            _err(where, f"{where} numbering per_level_facts is not a mapping")
+            continue
+        for raw_ilvl, level_facts in per_level.items():
+            try:
+                ilvl = int(raw_ilvl)
+            except (TypeError, ValueError):
+                _err(
+                    where,
+                    f"{where} numbering per_level_facts key {raw_ilvl!r} is not an "
+                    "integer level",
+                )
+                continue
+            if not isinstance(level_facts, dict):
+                _err(
+                    where,
+                    f"{where} numbering per_level_facts[{ilvl}] is not a mapping",
+                )
+                continue
+            shell_level = shell_levels.get(ilvl, {})
+            # (3) numFmt SHAPE: a valid OOXML field code.
+            numfmt = level_facts.get("numFmt")
+            if numfmt is not None:
+                if not isinstance(numfmt, str) or numfmt not in _NUMFMT_VALID_CODES:
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} numFmt {numfmt!r} is not a valid "
+                        "OOXML field code",
+                    )
+            # (4) lvlText OBSERVED-FLOOR: byte-identical to the shell's own lvlText.
+            lvltext = level_facts.get("lvlText")
+            if lvltext is not None:
+                if not isinstance(lvltext, str):
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} lvlText {lvltext!r} is not a string",
+                    )
+                elif "lvlText" not in shell_level or shell_level["lvlText"] != lvltext:
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} lvlText {lvltext!r} is not "
+                        "byte-identical to the shell's own lvlText for that level "
+                        "(synthesized numbering rejected)",
+                    )
+            # (5) indent OBSERVED-FLOOR: int + range, byte-identical to the shell's w:ind.
+            indent = level_facts.get("indent") or {}
+            if indent and not isinstance(indent, dict):
+                _err(where, f"{where} numbering level {ilvl} indent is not a mapping")
+                indent = {}
+            shell_indent = shell_level.get("indent", {})
+            for attr in _NUM_INDENT_ATTRS:
+                if attr not in indent:
+                    continue
+                value = indent[attr]
+                if not isinstance(value, int) or isinstance(value, bool):
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} indent.{attr} {value!r} is not an "
+                        "integer twips value",
+                    )
+                    continue
+                if not (_GEOMETRY_TWIPS_MIN <= value <= _GEOMETRY_TWIPS_MAX):
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} indent.{attr} {value} twips is out "
+                        f"of the sane OOXML range [{_GEOMETRY_TWIPS_MIN}, "
+                        f"{_GEOMETRY_TWIPS_MAX}]",
+                    )
+                    continue
+                if attr not in shell_indent or shell_indent[attr] != value:
+                    _err(
+                        where,
+                        f"{where} numbering level {ilvl} indent.{attr} {value} twips is not "
+                        "byte-identical to the shell's own w:ind for that level "
+                        "(synthesized numbering rejected)",
+                    )
+    return findings
+
+
 def _pptx_layout_names(shell) -> set:
     prs = Presentation(shell)
     return {layout.name for layout in prs.slide_layouts}

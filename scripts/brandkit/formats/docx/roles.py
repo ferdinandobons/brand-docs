@@ -166,10 +166,15 @@ def infer_roles(doc) -> dict:
         signal: str,
         *,
         resolver_extra: Optional[dict] = None,
-    ) -> None:
+    ) -> Optional[dict]:
+        """Nominate ``role_id`` (deduped: a slot already filled is left untouched).
+
+        Returns the role entry CREATED by this call, or ``None`` when the slot was
+        already filled (so a follow-up - e.g. D3 numbering capture - only ever enriches
+        the entry it just minted, never one an earlier higher-priority style claimed)."""
         if role_id in roles:
-            return
-        roles[role_id] = _role_entry(
+            return None
+        entry = _role_entry(
             role_id,
             style,
             confidence=confidence,
@@ -177,7 +182,9 @@ def infer_roles(doc) -> dict:
             signal=signal,
             resolver_extra=resolver_extra,
         )
+        roles[role_id] = entry
         roles["_index"].append(role_id)
+        return entry
 
     paragraph_styles = [s for s in doc.styles if s.type == WD_STYLE_TYPE.PARAGRAPH]
     table_styles = [s for s in doc.styles if s.type == WD_STYLE_TYPE.TABLE]
@@ -345,6 +352,15 @@ def _nominate_list_styles(doc, paragraph_styles, add) -> None:
     nominated first; a builtin list style fills a ``list.<family>.<level>`` slot
     only when no custom style claimed it. The load-bearing ref stays the verbatim
     style id, so this only ever picks a *present* style, never invents one.
+
+    NUMBERING FIDELITY (Cluster D3, DOCX-ONLY): when the referenced numbering id
+    resolves to per-level facts (``w:numFmt`` / ``w:lvlText`` / ``w:ind``) declared in
+    the shell's own ``w:abstractNum``, those facts are captured VERBATIM onto the role's
+    ``appearance.numbering`` (the sixth independent appearance axis, like geometry/table:
+    NO family gate, set-only-when-unset on apply). The engine never synthesizes a
+    numbering definition - it only REFERENCES the shell's numbering by id and at most
+    CLONES the shell's own ``w:abstractNum``. A template whose numbering declares no
+    per-level fact leaves ``appearance.numbering`` absent (byte-identical no-capture).
     """
     styles = list(paragraph_styles)
     custom = [s for s in styles if _is_custom_style(s)]
@@ -359,7 +375,7 @@ def _nominate_list_styles(doc, paragraph_styles, add) -> None:
             continue
         level = ilvl + 1  # role ids are 1-based; ilvl is 0-based
         rid = schema.role_id("list", family, level)
-        add(
+        entry = add(
             rid,
             style,
             0.85,
@@ -367,6 +383,14 @@ def _nominate_list_styles(doc, paragraph_styles, add) -> None:
             f"paragraph style w:numPr -> numbering numFmt {family} (structural)",
             resolver_extra={"num_id": str(num_id), "ilvl": int(ilvl)},
         )
+        # Capture the referenced numbering definition's per-level facts onto the role's
+        # appearance (only when this nomination actually claimed the slot - ``add``
+        # returns None for a slot a custom style already filled, so a later builtin must
+        # not overwrite the custom style's captured numbering).
+        if entry is not None:
+            numbering = structure.num_per_level_facts(doc, num_id)
+            if numbering:
+                entry.setdefault("appearance", {})["numbering"] = numbering
 
 
 def _find_style(styles: Iterable, name: str):

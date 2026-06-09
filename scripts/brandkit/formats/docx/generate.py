@@ -1007,6 +1007,11 @@ def _write_list_items(doc, resolver, block, items, findings) -> None:
         )
         _apply_resolved_style(doc, para, op, findings)
         _apply_list_numbering(para, op, item)
+        # Cluster D3: reference/clone the shell's numbering definition by id and re-assert
+        # the captured per-level facts (numFmt / lvlText / indent) onto the output's own
+        # w:abstractNum, set-only-when-unset. No-op for a profile with no captured numbering
+        # (op_numbering returns None), so the no-numbering path is byte-identical.
+        _apply_list_numbering_appearance(doc, op)
         if item.items:
             _write_list_items(doc, resolver, block, item.items, findings)
 
@@ -1042,6 +1047,154 @@ def _apply_list_numbering(para, op, item) -> None:
     numPr.append(ilvl_el)
     numPr.append(num_el)
     pPr.append(numPr)
+
+
+# The per-level ``w:ind`` attribute names captured/re-applied for Cluster D3 (mirrors
+# ``structure._NUM_INDENT_ATTRS``). Each is set-only-when-unset on the cloned level.
+_NUM_INDENT_ATTRS: tuple[str, ...] = ("left", "right", "firstLine", "hanging")
+
+
+def _numbering_root_of(doc):
+    """The output doc's ``w:numbering`` element, or ``None``. Crash-safe.
+
+    The output package is opened FROM the shell, so its numbering part already carries
+    the shell's own ``w:abstractNum``/``w:num`` definitions verbatim (python-docx copies
+    the part on load). This surfaces that root so the apply side can re-assert per-level
+    facts onto the cloned definition the output already holds."""
+    try:
+        part = doc.part.numbering_part
+    except (KeyError, AttributeError, ValueError):
+        return None
+    if part is None:
+        return None
+    return getattr(part, "element", None)
+
+
+def _ensure_numbering_def_present(doc, shell_doc, abstract_num_id: str) -> None:
+    """Ensure the output's numbering part carries ``w:abstractNum[@abstract_num_id]``,
+    cloning the SHELL's own definition by id when it is missing (Cluster D3).
+
+    The engine NEVER synthesizes a numbering definition: it can only CLONE the shell's
+    existing ``w:abstractNum`` verbatim (:func:`structure.clone_abstract_num`). In the
+    normal path the output IS the shell (opened from ``shell_path``), so the def is
+    already present and this is a no-op. Idempotent: a def already in the output is left
+    untouched (never duplicated). No-op when either numbering part is absent or the shell
+    declares no such id (the check layer rejects an undefined reference)."""
+    out_root = _numbering_root_of(doc)
+    if out_root is None or not abstract_num_id:
+        return
+    for an in out_root.findall(qn("w:abstractNum")):
+        if an.get(qn("w:abstractNumId")) == str(abstract_num_id):
+            return  # already present (idempotent)
+    shell_root = _numbering_root_of(shell_doc) if shell_doc is not None else None
+    clone = structure.clone_abstract_num(shell_root, abstract_num_id)
+    if clone is None:
+        return
+    # Insert the cloned abstractNum before the first w:num (abstractNum precedes num in
+    # the CT_Numbering child order), else append.
+    first_num = out_root.find(qn("w:num"))
+    if first_num is not None:
+        first_num.addprevious(clone)
+    else:
+        out_root.append(clone)
+
+
+def _reassert_level_facts(lvl, facts: dict) -> None:
+    """Re-assert one level's captured facts (numFmt / lvlText / indent) onto its
+    ``w:lvl`` element, SET-ONLY-WHEN-UNSET (Cluster D3).
+
+    Each fact is written ONLY when the level does not already carry it directly, so an
+    authored value (the shell's own, or a manual edit) is never clobbered and re-runs
+    stay byte-identical. The engine writes only VALUES the profile captured from the
+    shell (never synthesized): ``w:numFmt@w:val`` / ``w:lvlText@w:val`` are set on the
+    existing or a freshly-created child; each ``w:ind`` attribute is set on the level's
+    ``w:pPr/w:ind`` set-only-when-unset."""
+    numfmt = facts.get("numFmt")
+    if numfmt is not None:
+        el = lvl.find(qn("w:numFmt"))
+        if el is None:
+            el = OxmlElement("w:numFmt")
+            lvl.insert(0, el)
+            el.set(qn("w:val"), str(numfmt))
+        elif el.get(qn("w:val")) is None:
+            el.set(qn("w:val"), str(numfmt))
+    lvltext = facts.get("lvlText")
+    if lvltext is not None:
+        el = lvl.find(qn("w:lvlText"))
+        if el is None:
+            el = OxmlElement("w:lvlText")
+            lvl.append(el)
+            el.set(qn("w:val"), str(lvltext))
+        elif el.get(qn("w:val")) is None:
+            el.set(qn("w:val"), str(lvltext))
+    indent = facts.get("indent") or {}
+    if indent:
+        ppr = lvl.find(qn("w:pPr"))
+        if ppr is None:
+            ppr = OxmlElement("w:pPr")
+            lvl.append(ppr)
+        ind = ppr.find(qn("w:ind"))
+        if ind is None:
+            ind = OxmlElement("w:ind")
+            ppr.append(ind)
+        for attr in _NUM_INDENT_ATTRS:
+            value = indent.get(attr)
+            if value is None:
+                continue
+            if ind.get(qn(f"w:{attr}")) is not None:
+                continue  # authored indent is never clobbered (set-only-when-unset)
+            try:
+                ind.set(qn(f"w:{attr}"), str(int(value)))
+            except (TypeError, ValueError):
+                continue
+
+
+def _apply_list_numbering_appearance(doc, op, shell_doc=None) -> None:
+    """Apply the captured NUMBERING facts (Cluster D3, docx-only) onto the output's own
+    numbering definition: clone the shell's ``w:abstractNum`` by id when the output lacks
+    it, then re-assert each per-level ``numFmt``/``lvlText``/indent SET-ONLY-WHEN-UNSET.
+
+    The captured ``num_id``/``abstract_num_id`` are SYMBOLIC references the engine NEVER
+    invents; the per-level facts came from the shell's own abstractNum and are re-asserted
+    only when the output's level does not already declare them (the authored/inherited
+    value wins). A profile with no captured numbering never reaches the per-level
+    re-assert (``op_numbering`` returns ``None``), so the no-numbering path is a
+    byte-identical no-op. The output is opened FROM the shell, so the def is normally
+    present and the clone is a no-op; ``shell_doc`` lets a caller clone from a separately
+    opened shell when needed (kept optional for the byte-identical common path)."""
+    numbering = appearance.op_numbering(op)
+    if not numbering:
+        return
+    abstract_num_id = numbering.get("abstract_num_id")
+    if abstract_num_id:
+        _ensure_numbering_def_present(doc, shell_doc, abstract_num_id)
+    per_level = numbering.get("per_level_facts") or {}
+    if not per_level:
+        return
+    out_root = _numbering_root_of(doc)
+    if out_root is None:
+        return
+    target = None
+    for an in out_root.findall(qn("w:abstractNum")):
+        if an.get(qn("w:abstractNumId")) == str(abstract_num_id):
+            target = an
+            break
+    if target is None:
+        return
+    levels = {}
+    for lvl in target.findall(qn("w:lvl")):
+        try:
+            levels[int(lvl.get(qn("w:ilvl")) or 0)] = lvl
+        except (TypeError, ValueError):
+            continue
+    for ilvl, facts in per_level.items():
+        try:
+            il = int(ilvl)
+        except (TypeError, ValueError):
+            continue
+        lvl = levels.get(il)
+        if lvl is not None and isinstance(facts, dict):
+            _reassert_level_facts(lvl, facts)
 
 
 def _write_table(doc, resolver, block, findings, caption_ctx=None) -> None:

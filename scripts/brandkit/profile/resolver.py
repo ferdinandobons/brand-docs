@@ -351,11 +351,12 @@ class ProfileResolver:
     def _read_default_appearance(profile: dict) -> dict:
         """The document-level captured body typography, as an ``appearance`` dict.
 
-        FIVE INDEPENDENT axes: the body font/size live under ``theme.fonts.body``,
+        SIX INDEPENDENT axes: the body font/size live under ``theme.fonts.body``,
         the body color under the additive ``theme.text.body`` key, the body paragraph
-        GEOMETRY (Cluster D1, docx-only) under ``theme.geometry.body``, and the body
-        TABLE conditional-format facts (Cluster D2, docx-only) under
-        ``theme.table.body``. Each axis is included only when the template actually
+        GEOMETRY (Cluster D1, docx-only) under ``theme.geometry.body``, the body TABLE
+        conditional-format facts (Cluster D2, docx-only) under ``theme.table.body``, and
+        the body list NUMBERING facts (Cluster D3, docx-only) under
+        ``theme.numbering.body``. Each axis is included only when the template actually
         captured it, so a pre-feature profile yields an empty dict (behavior
         unchanged)."""
         if not profile:
@@ -379,6 +380,9 @@ class ProfileResolver:
         table = (theme.get("table") or {}).get("body")
         if table:
             out["table"] = table
+        numbering = (theme.get("numbering") or {}).get("body")
+        if numbering:
+            out["numbering"] = numbering
         return out
 
     def _merge_appearance(
@@ -450,6 +454,20 @@ class ProfileResolver:
         table = role_appearance.get("table") or default.get("table")
         if table:
             out["table"] = table
+
+        # NUMBERING / list-definition facts (Cluster D3, docx-only) are the sixth
+        # INDEPENDENT axis, merged exactly like geometry/table (NO family gate): a role's
+        # OWN captured numbering wins, else the body numbering default fills in. Absent on
+        # both sides ⇒ no key (byte-identical no-numbering path). The captured value is the
+        # referenced ``num_id`` / ``abstract_num_id`` (SYMBOLIC refs into the shell's
+        # numbering part) plus the shell's OWN per-level ``numFmt`` / ``lvlText`` / indent
+        # facts - passed VERBATIM. The apply side references/clones the shell's numbering by
+        # id and re-asserts the per-level facts set-only-when-unset; the check re-validates
+        # the ids against the shell and the per-level facts against the shell's own
+        # abstractNum (observed-floor). The engine NEVER synthesizes a numbering definition.
+        numbering = role_appearance.get("numbering") or default.get("numbering")
+        if numbering:
+            out["numbering"] = numbering
         return out
 
     @staticmethod
