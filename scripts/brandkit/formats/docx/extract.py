@@ -10,7 +10,7 @@ from docx import Document
 
 from brandkit.common import color
 from brandkit.formats import catalog
-from brandkit.formats.docx import cover, roles, structure
+from brandkit.formats.docx import cover, roles, structure, typography
 from brandkit.ooxml import pack
 from brandkit.profile import schema, store
 
@@ -28,6 +28,10 @@ def extract(
 
     theme = _extract_theme(template_path)
     role_registry = roles.infer_roles(doc)
+    # Capture the template's REAL visible fonts (often direct run-level overrides
+    # the named styles/theme never carry) into role.appearance + theme.fonts.body.
+    # Additive and deterministic: a template with no dominant direct font is a no-op.
+    typography.capture_fonts(doc, role_registry, theme)
     cover_anchors, anchors = cover.discover_cover(doc)
     demo_region = structure.detect_demo_region(doc)
     toc_present = structure.is_toc_present(doc)

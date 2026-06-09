@@ -7,10 +7,12 @@ import hashlib
 from pathlib import Path
 
 from docx import Document
+from lxml import etree
 from openpyxl import load_workbook
 from pptx import Presentation
 
 from brandkit.common import text as textutil
+from brandkit.ooxml import pack
 from brandkit.profile import comprehension as comprehensionmod
 from brandkit.profile import schema
 from brandkit.profile.reconcile import confidence_clears_floor
@@ -236,6 +238,79 @@ def _docx_style_keys(shell) -> set:
         if name:
             keys.add(name)
     return keys
+
+
+def _docx_shell_fonts(shell, profile: dict) -> set:
+    """Font names the shell makes available: every ``w:font`` in its fontTable, the
+    theme major/minor latin typefaces, and the Arial ``docDefaults`` baseline."""
+    fonts: set = {"Arial"}
+    theme_fonts = (profile.get("theme") or {}).get("fonts") or {}
+    for key in ("major", "minor"):
+        latin = (theme_fonts.get(key) or {}).get("latin")
+        if latin:
+            fonts.add(latin)
+    try:
+        xml = pack.read_part(shell, "word/fontTable.xml")
+    except KeyError:
+        return fonts
+    root = etree.fromstring(xml)
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    for font_el in root.findall(f"{ns}font"):
+        name = font_el.get(f"{ns}name")
+        if name:
+            fonts.add(name)
+    return fonts
+
+
+def check_appearance_targets(shell, profile: dict) -> list[Finding]:
+    """Verify every font the engine will APPLY is one the ``shell`` actually carries.
+
+    Typography capture records the template's dominant direct run fonts into
+    ``role.appearance.font.latin`` and ``theme.fonts.body.latin``; this is their
+    shell-backed peer of :func:`check_resolver_targets`. A font the shell does not
+    make available (e.g. a hand-edited profile) is an ERROR - off-brand output stays
+    impossible by construction. Only the fonts that will be applied are checked; the
+    theme major/minor declarations belong to the ALLOWED set, never the checked set.
+    A no-op when no appearance/body font is present (every pre-capture profile), and
+    for non-docx kinds.
+    """
+    if shell is None or profile.get("kind") != schema.Kind.DOCX.value:
+        return []
+    try:
+        available = _docx_shell_fonts(shell, profile)
+    except Exception as exc:  # opening the shell must never crash the gate
+        return [
+            Finding(
+                "appearance_targets_exist",
+                schema.Severity.WARNING.value,
+                f"could not verify fonts against shell: {exc}",
+            )
+        ]
+    applied: list[tuple[str, str]] = []
+    for rid, entry in (profile.get("roles") or {}).items():
+        if rid == "_index" or not isinstance(entry, dict):
+            continue
+        latin = ((entry.get("appearance") or {}).get("font") or {}).get("latin")
+        if latin:
+            applied.append((f"role {rid!r}", latin))
+    body_latin = (
+        ((profile.get("theme") or {}).get("fonts") or {}).get("body") or {}
+    ).get("latin")
+    if body_latin:
+        applied.append(("theme.fonts.body", body_latin))
+
+    findings: list[Finding] = []
+    for where, font in applied:
+        if font not in available:
+            findings.append(
+                Finding(
+                    "appearance_targets_exist",
+                    schema.Severity.ERROR.value,
+                    f"{where} font {font!r} is not available in the shell "
+                    f"(have {sorted(available)})",
+                )
+            )
+    return findings
 
 
 def _pptx_layout_names(shell) -> set:

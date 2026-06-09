@@ -26,7 +26,7 @@ come from the profile.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from brandkit.ir import model as ir
@@ -58,6 +58,7 @@ class ResolvedOp:
     status: str
     confidence: float
     kind: Optional[str] = None
+    appearance: dict[str, Any] = field(default_factory=dict)
 
     @property
     def resolver_type(self) -> Optional[str]:
@@ -88,6 +89,11 @@ class ProfileResolver:
         self.strict = strict
         self.kind = profile.get("kind")
         self.roles = profile.get("roles") or {}
+        # Document-level captured typography (the dominant body font), applied as a
+        # fallback to any paragraph whose role carries no role-specific font. Empty
+        # for every profile that predates typography capture, so behavior is
+        # unchanged there. Read once; the brand value lives only in the profile.
+        self._default_appearance = self._read_default_appearance(profile)
         # The resolver types this profile's kind is allowed to emit. An unknown
         # kind yields an empty set, so every concrete resolver is treated as
         # foreign (fail-closed) rather than blindly trusted.
@@ -125,6 +131,7 @@ class ProfileResolver:
         resolver = dict(entry.get("resolver") or {})
         status = entry.get("status", schema.Status.STUB.value)
         confidence = float(entry.get("confidence", 0.0))
+        appearance = self._merge_appearance(entry.get("appearance"))
 
         # Brand guarantee, enforced in ONE place for all three kinds: never emit
         # a concrete resolver whose type the kind cannot legally carry. An empty
@@ -145,11 +152,36 @@ class ProfileResolver:
             status=status,
             confidence=confidence,
             kind=self.kind,
+            appearance=appearance,
         )
 
+    @staticmethod
+    def _read_default_appearance(profile: dict) -> dict:
+        """The document-level captured body font, as an ``appearance`` dict."""
+        fonts = ((profile.get("theme") or {}).get("fonts") or {}) if profile else {}
+        latin = (fonts.get("body") or {}).get("latin")
+        return {"font": {"latin": latin}} if latin else {}
+
+    def _merge_appearance(self, role_appearance: Optional[dict]) -> dict:
+        """Effective appearance for a role: the role's own captured font wins;
+        otherwise the document-level body font fills in. Font-only in this version."""
+        role_appearance = role_appearance or {}
+        latin = (role_appearance.get("font") or {}).get("latin") or (
+            self._default_appearance.get("font") or {}
+        ).get("latin")
+        return {"font": {"latin": latin}} if latin else {}
+
     def _stub(self, role_id: str) -> ResolvedOp:
-        """An honest no-target op: empty resolver, zero confidence."""
-        return ResolvedOp(role_id, {}, schema.Status.STUB.value, 0.0, self.kind)
+        """An honest no-target op: empty resolver, zero confidence. It still carries
+        the document-level body font so a fallback paragraph is branded."""
+        return ResolvedOp(
+            role_id,
+            {},
+            schema.Status.STUB.value,
+            0.0,
+            self.kind,
+            appearance=self._merge_appearance(None),
+        )
 
     # -- docx IR-stream dispatch -------------------------------------------
     def resolve_block(self, block: ir.Block) -> ResolvedOp:

@@ -15,6 +15,14 @@ refuses a profile that points at anything the template does not actually contain
 
 ## 1. Brand typography capture (direct-formatting -> role `appearance`)
 
+> **Status: v1 shipped (font family).** The capture/verify/apply pipeline below is
+> implemented for the FONT FAMILY: extraction records the dominant direct run font
+> into `role.appearance.font.latin` and `theme.fonts.body`, `verify` re-validates it
+> against the shell (`appearance_targets_exist`), and generation applies it as
+> direct run formatting through the resolver. Still future: **run colors**, **font
+> size**, **per-word accents**, and **cover-layout reconstruction** (the separate
+> `cover.kind = NONE` gap). The design below documents the full feature.
+
 ### Problem
 A generated document does not always match the template's **real visible
 typography**. Observed on a real template (`Come funziona la Sotto-community.docx`):

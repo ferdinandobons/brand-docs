@@ -4,6 +4,22 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Brand typography capture (font family).** Extraction now captures the
+  template's dominant DIRECT run font - the real visible font a designed template
+  often applies per-run (e.g. Roboto / Montserrat) rather than via the named styles
+  or theme - into the reserved `role.appearance` field and an additive
+  `theme.fonts.body`. Generation applies it as direct run formatting through the
+  resolver, so a generated document renders in the template's real font instead of
+  falling back to the `docDefaults` font (typically Arial). Deterministic and
+  additive: a template with no dominant direct font, and every pre-capture profile,
+  behaves exactly as before. The brand guarantee holds - a captured/applied font is
+  re-validated against the shell's available fonts (fontTable + theme) by the new
+  `appearance_targets_exist` check (fail-closed ERROR otherwise). See
+  [ROADMAP](documentation/ROADMAP.md) section 1; colors, sizes, per-word accents,
+  and cover-layout reconstruction remain future scope.
+
 ## [0.6.2] - 2026-06-09
 
 A robustness fix for real-world templates. No schema, profile or output change for

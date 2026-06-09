@@ -87,6 +87,9 @@ def run_qa(
 
     # Deterministic resolver-target existence check (opens the shell once).
     findings = findings + checks_deterministic.check_resolver_targets(shell, profile)
+    # Shell-backed peer of resolver targets: every captured/applied font must be one
+    # the shell actually carries (fail-closed). No-op when no appearance is present.
+    findings = findings + checks_deterministic.check_appearance_targets(shell, profile)
     # Fail-closed comprehension-target membership (sibling of resolver targets):
     # every load-bearing comprehension ref must be a verbatim id from the surfaced
     # inventories. No-ops when comprehension is absent (model-free CI path,

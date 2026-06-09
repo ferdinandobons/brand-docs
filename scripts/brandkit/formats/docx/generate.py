@@ -829,8 +829,7 @@ def _apply_style(
     style = lookup_style(doc, op.resolver)
     if style is not None:
         target_obj.style = style
-        return
-    if op.resolver:
+    elif op.resolver:
         target = op.resolver.get("style_id") or op.resolver.get("style_name")
         findings.append(
             Finding(
@@ -849,6 +848,30 @@ def _apply_style(
                 f"{label.strip() or 'matching'} role to brand it",
             )
         )
+    # Apply the role's captured typography (font family) on top of the style. No-op
+    # for tables (no runs here) and for profiles with no captured appearance.
+    _apply_appearance(target_obj, op)
+
+
+def _apply_appearance(target_obj, op) -> None:
+    """Apply captured brand typography (font family) from the profile as direct run
+    formatting on a paragraph's runs.
+
+    The brand value comes ONLY from ``op.appearance`` (which the resolver populated
+    from the profile, role-specific font winning over the document body font), never
+    from a literal in this writer, so off-brand output stays impossible by
+    construction. Tables expose no ``runs`` here and are skipped; a run that already
+    carries an explicit font is left alone (the IR never sets fonts, so runs are
+    unfonted and inherit - we brand them)."""
+    latin = (getattr(op, "appearance", None) or {}).get("font", {}).get("latin")
+    if not latin:
+        return
+    runs = getattr(target_obj, "runs", None)
+    if not runs:
+        return
+    for run in runs:
+        if run.font.name is None:
+            run.font.name = latin
 
 
 def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:
