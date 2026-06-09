@@ -528,9 +528,11 @@ only NON-authoritative source). Capture is **model-free, deterministic, and
 byte-identical on re-extract**; a template with no observed color leaves an empty
 `{}` palette. The schema validates the shape only (`_validate_palette`); there is
 **no `SCHEMA_VERSION` bump** (it is an additive optional key, its documented default
-`{}`). docx captures the full palette (theme slots + run colors with a low-floor
-accent aggregation + per-role + link colors); pptx/xlsx seed a minimal palette from
-their parsed theme slots so the surfaced inventory is non-empty (format-uniform).
+`{}`). All three formats capture the same way (format-uniform): seed the palette
+from the parsed theme slots, then fold the DIRECT run/cell colors the template
+carries (low-floor accent aggregation + per-role + link colors) on top - docx walks
+runs, pptx walks slide/shape runs, xlsx walks styled cell fonts. A template with no
+direct color keeps just the seeded slots.
 
 ### `comprehension.palette_annotations` (model-driven, derived sink)
 The model **NAMES** each palette color, keyed by its palette id:
@@ -551,12 +553,15 @@ model **NEVER** writes `ref`/a color - only names.
 ### The run `color` token (APPLY)
 A run's optional `color` (§6) is a palette token the resolver maps to
 `theme.palette[token]['ref']` and applies. Every applied palette `ref` is
-re-validated against the shell **fail-closed** by `check_appearance_targets` (hex
-vs the palette UNION the observed `w:color`; theme token vs the parsed `clrScheme`
+re-validated against the shell **fail-closed** by `check_appearance_targets`, which
+is **format-neutral**: a per-kind collector reduces each shell (docx/pptx/xlsx) to
+the same fact set, then membership is checked uniformly (hex vs the shell's theme
+palette UNION its own observed run/cell hexes; theme token vs the parsed `clrScheme`
 slot). Guarantees: no literal hex in any IDoc/writer (structural rejection in
 `normalize_runs`); the model can NAME but never author a real color; the
 deterministic no-model path is byte-identical; re-runs are idempotent; everything is
-template-derived (no hardcoded colors/names/language).
+template-derived (no hardcoded colors/names/language). Applied on all three formats
+(the appearance/color apply layer is shared via `common/appearance.py`).
 
 ---
 

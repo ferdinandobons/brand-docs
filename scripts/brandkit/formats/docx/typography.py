@@ -39,36 +39,35 @@ behavior is unchanged.
 
 from __future__ import annotations
 
-from collections import Counter
-from typing import Any, Optional
+from typing import Optional
 
 from docx.enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR
 
-from brandkit.common import color as colorutil
-from brandkit.ooxml import names
-from brandkit.profile import schema
-
-# The 12 canonical theme slots a palette theme-key may name (single registry).
-_THEME_SLOTS: frozenset[str] = frozenset(colorutil.THEME_SLOTS)
-
-# A capture is only trusted when it is a clear convention, not noise.
-_MIN_RUNS = 3  # need at least this many explicit values to call a winner
-_MIN_DOMINANCE = 0.6  # the winner must cover >= 60% of those values
-
-# An accent color is SPARSE by design (a few runs of brand red on a body of black
-# text), so the palette accent bucket uses ONLY a low count floor and NOT the
-# _dominant _MIN_DOMINANCE gate: a color seen on at least this many runs but not the
-# document-dominant body color is recorded as an "accent" entry.
-_MIN_ACCENT_RUNS = 3
-
-# The closed ``where`` vocabulary for a palette entry's provenance (LOCKED). Every
-# provenance fact is one of these four observed sources; nothing else may be
-# recorded. ``palette_role`` is the only NON-authoritative source (the hardcoded,
-# template-invariant ``theme.palette_roles`` map), recorded for context but never
-# trusted as brand evidence.
-PALETTE_WHERE: frozenset[str] = frozenset(
-    {"palette_role", "role.appearance", "run.color", "link.color"}
+from brandkit.common.typography import (
+    PALETTE_WHERE,
 )
+from brandkit.common.typography import (
+    capture_appearance as _capture_appearance,
+)
+from brandkit.common.typography import (
+    capture_palette_facts as _capture_palette_facts,
+)
+from brandkit.ooxml import names
+
+# The generalizable capture engine (``capture_appearance`` / ``capture_palette_facts``
+# and the helpers/constants they lean on) now lives in the format-neutral
+# ``common.typography`` engine; this module keeps ONLY the docx-specific run readers
+# (``_run_size_hp`` / ``_run_color`` / ``_iter_para_runs`` / ``_is_link_run``), wraps
+# them into the structural ``RunFacts`` view the engine consumes, and delegates. The
+# docx adapter emits its CURRENT WordprocessingML tokens VERBATIM (``_run_color``
+# keeps emitting ``'text1'`` / ``'accent1'``; the palette key namespace is unchanged):
+# nothing here re-keys to ``THEME_SLOTS`` - that normalization is the pptx/xlsx
+# adapters' job only, which is exactly what keeps the docx frozen-hash anchor green.
+__all__ = [
+    "capture_fonts",
+    "capture_palette",
+    "PALETTE_WHERE",
+]
 
 # python-docx's sentinel for a theme color that maps to no real slot; its
 # ``xml_value`` is the truthy string ``"UNMAPPED"``. It is not a brand token (verify
@@ -83,29 +82,6 @@ _W = names.make_qn("w")
 # even when it is NOT physically nested under a ``w:hyperlink`` element (a manually
 # styled cross-reference). Closed, spec-fixed style ids (NOT brand literals).
 _HYPERLINK_RSTYLES: frozenset[str] = frozenset({"Hyperlink", "FollowedHyperlink"})
-
-
-def _dominant(counter: Counter) -> Optional[tuple[Any, float]]:
-    """Return ``(value, dominance)`` for the most common EXPLICIT value when it is a
-    clear convention over ALL sampled runs, else ``None``.
-
-    A ``None`` key counts runs that carry NO explicit value on this axis (they inherit
-    from the style/theme). Those "inherit" votes count toward the denominator but can
-    never WIN: a value is a convention only when it dominates EVERY run, not just the
-    explicit minority. This is what stops a 2%-of-runs accent color (the 98% inherit
-    their color) from being mistaken for the document's body color, while a body that
-    really is explicitly Roboto/16pt on (almost) every run still captures."""
-    total = sum(counter.values())
-    if total < _MIN_RUNS:
-        return None
-    candidates = [(value, n) for value, n in counter.items() if value is not None]
-    if not candidates:
-        return None
-    value, n = max(candidates, key=lambda item: item[1])
-    ratio = n / total
-    if ratio < _MIN_DOMINANCE:
-        return None
-    return value, ratio
 
 
 def _run_size_hp(run) -> Optional[int]:
@@ -154,11 +130,55 @@ def _run_color(run) -> Optional[tuple[str, ...]]:
     return None
 
 
-def _color_obj(bucket: tuple[str, ...]) -> dict:
-    """Turn a captured color bucket key back into its stored ``appearance`` object."""
-    if bucket[0] == "hex":
-        return {"kind": "hex", "hex": bucket[1]}
-    return {"kind": "theme", "theme": bucket[1]}
+class _DocxRunFact:
+    """A docx run, reduced to the structural :class:`~brandkit.common.typography.RunFacts`
+    view the shared capture engine consumes.
+
+    The three axes are read EXACTLY as the v1 inline capture did (``run.font.name`` or
+    ``None`` / :func:`_run_size_hp` / :func:`_run_color`), so the engine sees the
+    byte-identical votes. ``color`` keeps the docx WordprocessingML token namespace
+    verbatim (``'text1'`` / ``'accent1'`` from ``_run_color``) - NO normalization to
+    ``THEME_SLOTS`` - which is what keeps the docx palette keys (and the frozen-hash
+    anchor) unchanged."""
+
+    __slots__ = ("style_key", "text", "font_name", "size_hp", "color", "is_link")
+
+    def __init__(self, run, style_key, *, is_link: bool) -> None:
+        self.style_key = style_key
+        self.text = run.text or ""
+        self.font_name = run.font.name or None
+        self.size_hp = _run_size_hp(run)
+        self.color = _run_color(run)
+        self.is_link = is_link
+
+
+def _para_style_key(para) -> tuple[Optional[str], Optional[str]]:
+    """The ``(style_id, style_name)`` of a paragraph's effective style, crash-safe.
+
+    python-docx resolves a paragraph's effective style (a paragraph with no explicit
+    ``pStyle`` reports the document's default style), so this is the real bucket key
+    the per-role fold matches against. A reader that refuses to resolve the style
+    yields ``(None, None)`` - the run then votes only toward the document body."""
+    try:
+        style = para.style
+        sid = getattr(style, "style_id", None) if style is not None else None
+        sname = getattr(style, "name", None) if style is not None else None
+    except Exception:
+        sid = sname = None
+    return (sid, sname)
+
+
+def _font_run_facts(doc):
+    """Yield a :class:`_DocxRunFact` for every DIRECT ``w:r`` run in document order
+    (``doc.paragraphs`` then ``para.runs``), tagged with the paragraph's style key.
+
+    This is the font/size/color sampling pass: it deliberately does NOT widen to the
+    hyperlink runs (matching v1 ``capture_fonts``, which read ``para.runs`` only). A
+    single ordered generator keeps the ``Counter`` insertion order deterministic."""
+    for para in doc.paragraphs:
+        style_key = _para_style_key(para)
+        for run in para.runs:
+            yield _DocxRunFact(run, style_key, is_link=False)
 
 
 def capture_fonts(doc, roles: dict, theme: dict) -> None:
@@ -171,107 +191,17 @@ def capture_fonts(doc, roles: dict, theme: dict) -> None:
     contributes nothing to THAT axis (the three axes are sampled independently).
     python-docx resolves a paragraph's effective style (a paragraph with no explicit
     ``pStyle`` reports the document's default style), so runs are bucketed by their
-    real style id/name.
+    real style id/name. This now builds a docx ``RunFacts`` generator over the direct
+    runs and delegates to the format-neutral
+    :func:`~brandkit.common.typography.capture_appearance`; the default
+    ``role_style_key`` reproduces the docx ``named_style`` OR-match byte-identically.
     """
-    per_style_font: dict[tuple[Optional[str], Optional[str]], Counter] = {}
-    per_style_size: dict[tuple[Optional[str], Optional[str]], Counter] = {}
-    per_style_color: dict[tuple[Optional[str], Optional[str]], Counter] = {}
-    overall_font: Counter = Counter()
-    overall_size: Counter = Counter()
-    overall_color: Counter = Counter()
-
-    for para in doc.paragraphs:
-        try:
-            style = para.style
-            sid = getattr(style, "style_id", None) if style is not None else None
-            sname = getattr(style, "name", None) if style is not None else None
-        except Exception:
-            sid = sname = None
-        for run in para.runs:
-            if not (run.text or "").strip():
-                continue
-            # Every run votes on every axis: an explicit value, or ``None`` meaning
-            # "inherits this axis". The None votes count in the denominator so a value
-            # is captured only when it dominates ALL runs (see _dominant) - e.g. an
-            # accent color on a few runs never becomes the body color when most runs
-            # inherit their color.
-            font = run.font.name or None  # explicit ascii/hAnsi typeface, else None
-            size_hp = _run_size_hp(run)
-            color = _run_color(run)
-            overall_font[font] += 1
-            overall_size[size_hp] += 1
-            overall_color[color] += 1
-            if sid or sname:
-                key = (sid, sname)
-                per_style_font.setdefault(key, Counter())[font] += 1
-                per_style_size.setdefault(key, Counter())[size_hp] += 1
-                per_style_color.setdefault(key, Counter())[color] += 1
-
-    body_font = _dominant(overall_font)
-    body_size = _dominant(overall_size)
-    if body_font is not None or body_size is not None:
-        fonts = theme.setdefault("fonts", {})
-        body = fonts.setdefault("body", {})
-        if body_font is not None:
-            body["latin"] = body_font[0]
-            body["confidence"] = round(body_font[1], 3)
-        if body_size is not None:
-            body["size_hp"] = int(body_size[0])
-            body["size_confidence"] = round(body_size[1], 3)
-    body_color = _dominant(overall_color)
-    if body_color is not None:
-        text = theme.setdefault("text", {}).setdefault("body", {})
-        text["color"] = _color_obj(body_color[0])
-        text["color_confidence"] = round(body_color[1], 3)
-
-    for rid, entry in roles.items():
-        if rid == "_index" or not isinstance(entry, dict):
-            continue
-        resolver = entry.get("resolver") or {}
-        if resolver.get("type") != schema.ResolverType.NAMED_STYLE.value:
-            continue
-        sid = resolver.get("style_id")
-        sname = resolver.get("style_name")
-
-        def _role_counter(per_style: dict) -> Counter:
-            counter: Counter = Counter()
-            for (k_sid, k_sname), c in per_style.items():
-                if (sid and k_sid == sid) or (sname and k_sname == sname):
-                    counter.update(c)
-            return counter
-
-        dom_font = _dominant(_role_counter(per_style_font))
-        dom_size = _dominant(_role_counter(per_style_size))
-        dom_color = _dominant(_role_counter(per_style_color))
-        if dom_font is None and dom_size is None and dom_color is None:
-            continue
-        appearance = entry.setdefault("appearance", {})
-        if dom_font is not None:
-            appearance["font"] = {"latin": dom_font[0]}
-            appearance["confidence"] = round(dom_font[1], 3)
-        if dom_size is not None:
-            appearance["size_hp"] = int(dom_size[0])
-            appearance["size_confidence"] = round(dom_size[1], 3)
-        if dom_color is not None:
-            appearance["color"] = _color_obj(dom_color[0])
-            appearance["color_confidence"] = round(dom_color[1], 3)
+    _capture_appearance(_font_run_facts(doc), roles, theme)
 
 
 # ---------------------------------------------------------------------------
 # theme.palette capture (model-free; the UNDERSTAND half of model-driven color)
 # ---------------------------------------------------------------------------
-def _palette_key(bucket: tuple[str, ...]) -> str:
-    """The TEMPLATE-DERIVED palette key for a captured color bucket.
-
-    A theme bucket keys by its WML theme token (``accent1`` / ``text1`` / ...);
-    an off-theme RGB bucket keys by ``hex:RRGGBB``. The key is the stable id the
-    comprehension annotates and the resolver/QA look up - never a brand name.
-    """
-    if bucket[0] == "hex":
-        return f"hex:{bucket[1]}"
-    return bucket[1]
-
-
 def _iter_para_runs(para):
     """Yield every run in ``para``: its direct ``w:r`` runs AND the runs nested under
     its ``w:hyperlink`` elements.
@@ -316,46 +246,6 @@ def _is_link_run(run) -> bool:
     return False
 
 
-def _add_provenance(entry: dict, where: str, detail: str) -> None:
-    """Record one observed ``{where, detail}`` provenance fact on a palette entry,
-    de-duplicated and kept sorted by ``(where, detail)`` (deterministic).
-
-    ``where`` must be in the closed :data:`PALETTE_WHERE` vocabulary; an unknown
-    ``where`` is dropped (capture only records observed facts in the frozen set).
-    """
-    if where not in PALETTE_WHERE:
-        return
-    provenance = entry.setdefault("provenance", [])
-    fact = {"where": where, "detail": detail}
-    if fact in provenance:
-        return
-    provenance.append(fact)
-    provenance.sort(key=lambda p: (p["where"], p["detail"]))
-
-
-def _palette_entry(palette: dict, bucket: tuple[str, ...]) -> dict:
-    """Get-or-create the palette entry for a color bucket, keyed template-derived.
-
-    A new entry carries the byte-identical :func:`_color_obj` ref, an empty
-    provenance, a placeholder frequency (set by the caller), and the three
-    model-only fields (``name`` / ``purpose`` / ``use_when``) explicitly ``null``
-    in the deterministic path - ``comprehend`` is the only writer that fills them.
-    """
-    key = _palette_key(bucket)
-    entry = palette.get(key)
-    if entry is None:
-        entry = {
-            "ref": _color_obj(bucket),
-            "provenance": [],
-            "frequency": "rare",
-            "name": None,
-            "purpose": None,
-            "use_when": None,
-        }
-        palette[key] = entry
-    return entry
-
-
 def capture_palette(doc, roles: dict, theme: dict) -> None:
     """Capture the template's brand PALETTE into ``theme['palette']`` (mutated in
     place), additively and deterministically.
@@ -389,94 +279,25 @@ def capture_palette(doc, roles: dict, theme: dict) -> None:
     brand evidence; it is recorded only as a non-authoritative ``palette_role``
     where-entry on the slot it names. Deterministic and byte-identical on
     re-extract; a template with no observed color leaves an empty ``{}`` palette.
-    """
-    palette: dict = theme.setdefault("palette", {})
 
-    # (b) Observed w:color on runs, in a SINGLE pass. ``overall_color`` votes on
-    # EVERY run (a ``None`` key for a run that inherits its color) so the dominance
-    # gate is over ALL runs - identical to capture_fonts; ``run_color_counts`` keys
-    # only the explicit-color buckets (the accent floor / provenance). ``link_buckets``
-    # tracks which buckets were seen on a link run (source d).
-    overall_color: Counter = Counter()
-    run_color_counts: Counter = Counter()
-    link_buckets: set[tuple[str, ...]] = set()
+    This now builds a docx ``RunFacts`` generator over the WIDENED run pass (direct
+    ``w:r`` runs AND the runs nested under ``w:hyperlink`` - source d) and delegates to
+    :func:`~brandkit.common.typography.capture_palette_facts`. The bucket namespace is
+    the docx WordprocessingML tokens VERBATIM (``_run_color``); nothing re-keys to
+    ``THEME_SLOTS``, so the palette keys are byte-identical to v1.
+    """
+    _capture_palette_facts(_palette_run_facts(doc), roles, theme)
+
+
+def _palette_run_facts(doc):
+    """Yield a :class:`_DocxRunFact` for every run in the WIDENED palette pass
+    (``doc.paragraphs`` then :func:`_iter_para_runs`, which adds the hyperlink runs),
+    each tagged with :func:`_is_link_run`.
+
+    The palette pass reads only ``color`` / ``is_link`` (font/size/style_key are
+    irrelevant here), but the same ``_DocxRunFact`` view carries them. A single
+    ordered generator keeps the dominance ``Counter`` insertion order deterministic,
+    identical to v1 ``capture_palette``."""
     for para in doc.paragraphs:
         for run in _iter_para_runs(para):
-            if not (run.text or "").strip():
-                continue
-            bucket = _run_color(run)
-            overall_color[bucket] += 1
-            if bucket is None:
-                continue
-            run_color_counts[bucket] += 1
-            if _is_link_run(run):
-                link_buckets.add(bucket)
-
-    # The single document-dominant body color (if any) gets the ``dominant`` coarse
-    # bucket; everything else observed on runs is ``accent`` (>= floor) or ``rare``.
-    dominant_color = _dominant(overall_color)
-    dominant_bucket = dominant_color[0] if dominant_color is not None else None
-
-    # (a) Seed theme-keyed entries for every slot the template's theme carries. This
-    # is existence (so the slot has a stable palette key), not a where-fact.
-    for slot in theme.get("colors") or {}:
-        if slot in _THEME_SLOTS:
-            _palette_entry(palette, ("theme", slot))
-
-    # (b) record each observed run color, with its coarse frequency.
-    for bucket, count in run_color_counts.items():
-        entry = _palette_entry(palette, bucket)
-        if bucket == dominant_bucket:
-            entry["frequency"] = "dominant"
-        elif count >= _MIN_ACCENT_RUNS:
-            entry["frequency"] = "accent"
-        else:
-            entry["frequency"] = "rare"
-        _add_provenance(entry, "run.color", _palette_key(bucket))
-
-    # (d) link-color where-facts for buckets observed on link runs; plus a fallback
-    # to the theme hlink/folHlink slots when the template declares them, so the link
-    # palette is non-empty even when no run carries an explicit link color.
-    for bucket in link_buckets:
-        _add_provenance(
-            _palette_entry(palette, bucket), "link.color", _palette_key(bucket)
-        )
-    for slot in ("hlink", "folHlink"):
-        if slot in (theme.get("colors") or {}):
-            entry = _palette_entry(palette, ("theme", slot))
-            _add_provenance(entry, "link.color", slot)
-
-    # (c) per-role appearance.color already captured (role.appearance where-fact).
-    for rid, role_entry in roles.items():
-        if rid == "_index" or not isinstance(role_entry, dict):
-            continue
-        color = (role_entry.get("appearance") or {}).get("color")
-        if not isinstance(color, dict):
-            continue
-        bucket = _color_obj_to_bucket(color)
-        if bucket is None:
-            continue
-        _add_provenance(_palette_entry(palette, bucket), "role.appearance", rid)
-
-    # palette_role: the hardcoded, template-INVARIANT map - recorded NON-
-    # authoritatively (it is not brand evidence), only on the slot it names.
-    for prole, ref in (theme.get("palette_roles") or {}).items():
-        slot = ref.get("theme") if isinstance(ref, dict) else None
-        if slot and slot in _THEME_SLOTS:
-            _add_provenance(
-                _palette_entry(palette, ("theme", slot)), "palette_role", prole
-            )
-
-
-def _color_obj_to_bucket(color: dict) -> Optional[tuple[str, ...]]:
-    """Invert :func:`_color_obj`: a stored color object -> its bucket key, or None.
-
-    Used to fold an already-captured ``role.appearance.color`` (which is a
-    ``_color_obj``) back into a palette bucket without re-reading the run.
-    """
-    kind = color.get("kind")
-    if kind == "hex" and color.get("hex"):
-        return ("hex", str(color["hex"]))
-    if kind == "theme" and color.get("theme"):
-        return ("theme", str(color["theme"]))
-    return None
+            yield _DocxRunFact(run, None, is_link=_is_link_run(run))

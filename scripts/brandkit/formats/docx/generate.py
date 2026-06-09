@@ -15,6 +15,7 @@ from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from docx.shared import Emu, Pt, RGBColor
 
+from brandkit.common import appearance
 from brandkit.common import color as colorutil
 from brandkit.common import text as textutil
 from brandkit.common.links import is_safe_link_url
@@ -306,26 +307,12 @@ def _resolve_run_color(
 ) -> Optional[dict]:
     """Resolve a run's ``color`` palette TOKEN to its captured color ``ref`` object.
 
-    Returns the ``{'kind': 'theme'|'hex', ...}`` object the writers apply, or
-    ``None`` when there is no token, no resolver, or the token is unknown. An
-    UNRESOLVED token (present, but not a key of ``theme.palette``) is recorded as a
-    graceful INFO ``color_token_unresolved`` finding (the run is then left to inherit
-    its color, mirroring ``appearance_color_skipped``) - the writer NEVER fabricates
-    a color for an unknown token. The token itself never carries a literal color
-    (``normalize_runs`` already rejected any hex-shaped value structurally)."""
-    if not token or resolver is None:
-        return None
-    color = resolver.resolve_color(token)
-    if color is None and findings is not None:
-        findings.append(
-            Finding(
-                "color_token_unresolved",
-                schema.Severity.INFO.value,
-                f"run color token {token!r} is not a key of theme.palette; "
-                "left inherited",
-            )
-        )
-    return color
+    A thin docx alias for the format-neutral ``common.appearance.resolve_run_color``:
+    returns the ``{'kind': 'theme'|'hex', ...}`` object the writers apply, or ``None``
+    when there is no token, no resolver, or the token is unknown (an UNRESOLVED token
+    records a graceful INFO ``color_token_unresolved`` finding and leaves the run
+    inherited - the writer NEVER fabricates a color for an unknown token)."""
+    return appearance.resolve_run_color(resolver, token, findings)
 
 
 def _inject_hyperlink_run_color(rpr, color: Optional[dict]) -> None:
@@ -520,7 +507,7 @@ def _add_runs(
             run = para.add_run(text)
             _apply_run_toggles(run, r)
             _brand_run_font(run, latin)
-            _brand_run_color(run, color, sink)
+            appearance.apply_run_color(DOCX_BACKEND, run, color, sink)
 
 
 def _para_with_runs(
@@ -1220,34 +1207,12 @@ def _apply_style(
     _apply_appearance(target_obj, op, findings)
 
 
-def _op_latin(op) -> Optional[str]:
-    """The captured brand latin font this resolved op applies, or ``None``.
-
-    The brand value comes ONLY from ``op.appearance`` (which the resolver populated
-    from the profile, role-specific font winning over the document body font), never
-    from a literal in this writer, so off-brand output stays impossible by
-    construction. ``None`` for every pre-capture profile (empty appearance)."""
-    return (getattr(op, "appearance", None) or {}).get("font", {}).get("latin")
-
-
-def _op_size_hp(op) -> Optional[int]:
-    """The captured brand run SIZE (half-points) this resolved op applies, or ``None``.
-
-    Read STRICTLY from ``op.appearance`` (resolver-populated from the profile,
-    role-specific size winning over the document body size). The body size only ever
-    reaches the body/paragraph family - the resolver's family gate keeps it off
-    headings - so a heading's intrinsic style size is never overridden here."""
-    return (getattr(op, "appearance", None) or {}).get("size_hp")
-
-
-def _op_color(op) -> Optional[dict]:
-    """The captured brand run COLOR this resolved op applies (a ``{'kind': ...}``
-    object), or ``None``.
-
-    Read STRICTLY from ``op.appearance``. Like size, the body color reaches only the
-    body/paragraph family via the resolver's family gate, so a heading's intrinsic
-    style color is never overridden here."""
-    return (getattr(op, "appearance", None) or {}).get("color")
+# The captured-axis readers now live in the format-neutral ``common.appearance``
+# engine. docx still reads the font axis directly (``_op_latin`` is threaded into
+# ``_add_runs`` for the raw-XML hyperlink font, the one path outside the shared
+# orchestration); the size/color axes are applied only through
+# ``appearance.apply_role_appearance``, so no docx-local size/color alias is needed.
+_op_latin = appearance.op_latin
 
 
 # The WordprocessingML themeColor tokens python-docx emits (``MSO_THEME_COLOR``
@@ -1275,29 +1240,31 @@ def _brand_run_font(run, latin: Optional[str]) -> None:
         run.font.name = latin
 
 
-def _brand_run_size(run, size_hp: Optional[int]) -> None:
-    """Set ``run.font.size`` from the captured ``size_hp`` (half-points) ONLY when the
-    run carries no explicit size (the per-axis guard).
-
-    ``run.font.size`` is ``None`` when inherited; we set it from the half-point bucket
-    (``Pt(size_hp / 2)``) only then, so a run with its own explicit size is left alone
-    and re-runs stay byte-identical. A falsy ``size_hp`` is a no-op."""
-    if size_hp and run.font.size is None:
-        run.font.size = Pt(size_hp / 2)
-
-
 def _brand_run_color(run, color: Optional[dict], findings: list[Finding]) -> None:
     """Set ``run.font.color`` from the captured ``color`` object ONLY when the run
     carries no explicit color (``run.font.color.type is None``) (the per-axis guard).
+
+    A guarded wrapper over :func:`_set_run_color` for the docx-only call sites that
+    apply a color outside the shared orchestration (the unsafe-url link fallback in
+    :func:`_add_hyperlink`). The set-only-when-unset guard for the orchestration-driven
+    paths lives in :meth:`_DocxAppearanceBackend.color_unset`; this wrapper carries the
+    SAME ``run.font.color.type is None`` guard so the two paths stay identical. The
+    value is read STRICTLY from the resolver op (never a literal); a falsy ``color`` is
+    a no-op."""
+    if not color or run.font.color.type is not None:
+        return
+    _set_run_color(run, color, findings)
+
+
+def _set_run_color(run, color: dict, findings: list[Finding]) -> None:
+    """Write ``run.font.color`` from the captured ``color`` object UNCONDITIONALLY
+    (the caller has already confirmed the run carries no explicit color).
 
     A hex color is applied via ``run.font.color.rgb``; a theme-token color is mapped
     through the CLOSED :data:`_WML_TOKEN_TO_THEME_COLOR` table to an
     ``MSO_THEME_COLOR`` member and applied via ``run.font.color.theme_color``. A
     token that does not map is SKIPPED with an INFO finding rather than letting a bad
-    apply raise. The value is read STRICTLY from the resolver op (never a literal);
-    a falsy ``color`` is a no-op."""
-    if not color or run.font.color.type is not None:
-        return
+    apply raise. The value is read STRICTLY from the resolver op (never a literal)."""
     kind = color.get("kind")
     if kind == "hex":
         hexval = color.get("hex")
@@ -1380,27 +1347,54 @@ def _all_para_runs(target_obj) -> list:
     return runs
 
 
+class _DocxAppearanceBackend:
+    """The docx hook set the format-neutral ``common.appearance`` orchestration drives.
+
+    It wraps the docx-specific run reader and per-axis probes/writers VERBATIM -
+    ``_all_para_runs`` (paragraph runs incl. raw-XML hyperlink runs), the
+    ``run.font.<axis> is None`` set-only-when-unset probes, and the unconditional
+    per-axis writes (``run.font.name = latin`` / ``Pt(half_pts / 2)`` /
+    :func:`_set_run_color`) - so the shared control flow (probe, then write only when
+    unset) produces byte-identical docx output, exactly the inlined v1 behavior. The
+    docx-only raw-XML hyperlink injection (``_inject_hyperlink_run_color``) and the
+    WordprocessingML token map stay outside this backend."""
+
+    def runs_of(self, target):
+        return _all_para_runs(target)
+
+    def font_unset(self, run) -> bool:
+        return run.font.name is None
+
+    def set_font(self, run, latin: str) -> None:
+        run.font.name = latin
+
+    def size_unset(self, run) -> bool:
+        return run.font.size is None
+
+    def set_size(self, run, half_pts: int) -> None:
+        run.font.size = Pt(half_pts / 2)
+
+    def color_unset(self, run) -> bool:
+        return run.font.color.type is None
+
+    def set_color(self, run, ref: dict, findings) -> None:
+        _set_run_color(run, ref, findings)
+
+
+DOCX_BACKEND = _DocxAppearanceBackend()
+
+
 def _apply_appearance(target_obj, op, findings: list[Finding]) -> None:
     """Apply captured brand typography (font, size, color) from the profile as direct
     run formatting on a paragraph's runs (hyperlink runs included).
 
-    The three axes are INDEPENDENT: each is applied only when the run's corresponding
-    attribute is unset (font when ``run.font.name`` is None; size when
-    ``run.font.size`` is None; color when ``run.font.color.type`` is None), so a role
-    carrying a size but no font (or a color but no font) still applies the axes it
-    has. Hyperlink runs are reached via :func:`_all_para_runs` so a link matches the
-    body size/font/color rather than rendering at the inherited default. Tables expose
-    no ``runs`` here and are skipped; the per-cell paragraphs are branded by the table
-    writer instead."""
-    latin = _op_latin(op)
-    size_hp = _op_size_hp(op)
-    color = _op_color(op)
-    if not (latin or size_hp or color):
-        return
-    for run in _all_para_runs(target_obj):
-        _brand_run_font(run, latin)
-        _brand_run_size(run, size_hp)
-        _brand_run_color(run, color, findings)
+    A thin docx wrapper over the format-neutral
+    ``common.appearance.apply_role_appearance`` driven by :data:`DOCX_BACKEND`. The
+    three axes stay INDEPENDENT (each applied only when the run's attribute is unset,
+    via the backend's ``_brand_run_*`` guards), hyperlink runs are reached via
+    :func:`_all_para_runs`, and a target with no runs (a docx table here) is skipped -
+    output is byte-identical to the inlined v1 loop."""
+    appearance.apply_role_appearance(DOCX_BACKEND, target_obj, op, findings)
 
 
 def _apply_resolved_style(doc, para, op, findings: list[Finding]) -> None:

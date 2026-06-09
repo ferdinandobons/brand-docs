@@ -307,9 +307,19 @@ model-in-the-loop track.
 
 ### Cluster A - Cross-format universality (the unblocker)
 
-Fixes the KEY GAP: `appearance` v2, model-driven color, and caption-index regen
-APPLY on docx only (`check_appearance_targets` hard-gates on `Kind.DOCX`;
-`resolver.resolve_color`/`_merge_appearance` are already kind-agnostic but unconsumed
+> **Status: SHIPPED (appearance + model-driven color).** A1+A2+A3 below are
+> implemented: the docx capture/apply helpers were extracted into shared
+> `common/typography.py` + `common/appearance.py` (docx stays byte-identical, proven
+> by a frozen-hash anchor), pptx/xlsx now CAPTURE + APPLY appearance/color through a
+> per-format backend protocol, and `check_appearance_targets` is format-neutral
+> (per-kind shell-fact collectors). The model's `palette_annotations` naming is now
+> load-bearing on all 3 formats. **Still docx-only: caption-index regeneration** (the
+> `SEQ`/`refresh_visible_caption_index_cache` machinery lives only in
+> `formats/docx/structure.py`), so that half of the original gap remains open.
+
+Originally fixed the KEY GAP: `appearance` v2, model-driven color, and caption-index
+regen APPLYed on docx only (`check_appearance_targets` hard-gated on `Kind.DOCX`;
+`resolver.resolve_color`/`_merge_appearance` were already kind-agnostic but unconsumed
 by pptx/xlsx).
 
 | # | Item | Value | Seam reused | Feas | Why universal |

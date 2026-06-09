@@ -20,8 +20,10 @@ from pathlib import Path
 from openpyxl import load_workbook
 
 from brandkit.common import color
+from brandkit.common import typography as common_typography
 from brandkit.formats import catalog
 from brandkit.formats.xlsx import structure as xlsx_structure
+from brandkit.formats.xlsx import typography
 from brandkit.ooxml import pack
 from brandkit.profile import schema, store
 
@@ -55,6 +57,20 @@ def extract(
     images = xlsx_structure.inventory_images(wb)
 
     roles = _roles(named_regions, named_styles, number_formats)
+    # The xlsx theme block (parsed clrScheme + the seeded palette floor). Built here
+    # so the capture pass below can fold the workbook's DIRECT cell font typography on
+    # top of the seed floor before the envelope is assembled (same shape docx fills).
+    theme = _theme(template_path)
+    # Capture the workbook's REAL visible cell typography (font, size, color) into
+    # theme.fonts.body / theme.text.body / role.appearance, then fold observed cell
+    # font colors into theme.palette on top of the seed floor. Additive and
+    # deterministic: a workbook with no dominant direct value leaves the body keys
+    # untouched, and the palette _palette_entry get-or-create is idempotent over the
+    # seed. xlsx roles use named-range / cell-style / number-format resolvers (no
+    # named_style type), so the engine's default role_style_key yields None: the body
+    # capture is the primary xlsx appearance source.
+    common_typography.capture_appearance(typography.iter_run_facts(wb), roles, theme)
+    common_typography.capture_palette_facts(typography.iter_run_facts(wb), roles, theme)
     surface = {
         "xlsx": {
             "sheets": wb.sheetnames,
@@ -78,7 +94,7 @@ def extract(
             "filename": template_path.name,
             "sha256": store.sha256_file(template_path),
         },
-        theme=_theme(template_path),
+        theme=theme,
         roles=roles,
         surface=surface,
         structure=skeleton,

@@ -112,17 +112,16 @@ def seed_theme_palette(theme: dict) -> dict:
     is not fail-closed on empty for those formats - the docx extractor still runs
     the richer run/link/role-color capture on top. Deterministic and idempotent.
     """
+    # Build entries through the SINGLE shared writer of the palette entry shape
+    # (``common.typography._palette_entry``) so the seed floor and the per-format
+    # capture cannot drift apart. Imported lazily because ``common.typography``
+    # imports this module for ``THEME_SLOTS`` (avoids an import cycle).
+    from brandkit.common.typography import _palette_entry
+
     palette = theme.setdefault("palette", {})
     for slot in THEME_SLOTS:
         if slot in (theme.get("colors") or {}) and slot not in palette:
-            palette[slot] = {
-                "ref": {"kind": "theme", "theme": slot},
-                "provenance": [],
-                "frequency": "rare",
-                "name": None,
-                "purpose": None,
-                "use_when": None,
-            }
+            _palette_entry(palette, ("theme", slot))
     return palette
 
 

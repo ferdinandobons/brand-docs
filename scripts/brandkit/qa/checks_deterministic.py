@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import hashlib
+import re
+from typing import NamedTuple
 from pathlib import Path
 
 from docx import Document
@@ -21,6 +23,9 @@ from brandkit.qa.model import Finding
 # WordprocessingML qualified-name builder (the spec-fixed namespace), so the shell
 # readers below never hand-copy the namespace URI.
 _W = names.make_qn("w")
+# DrawingML qualified-name builder (the pptx run/theme namespace), shared with the
+# pptx appearance collector below.
+_A = names.make_qn("a")
 
 
 def check_profile(profile: dict) -> list[Finding]:
@@ -319,6 +324,172 @@ def _docx_theme_palette(shell) -> dict[str, str]:
     return colorutil.parse_theme_colors(xml)
 
 
+# ---------------------------------------------------------------------------
+# Format-neutral shell appearance facts (A3): the PROVENANCE every applied
+# font/size/color is re-validated against, collected per kind into ONE shape.
+# ---------------------------------------------------------------------------
+class ShellAppearanceFacts(NamedTuple):
+    """The typographic provenance a shell proves it carries, format-neutral.
+
+    The single shape every per-kind collector fills so the membership loops in
+    :func:`check_appearance_targets` are format-agnostic:
+
+      - ``fonts``: the font names the shell makes AVAILABLE (the allow-set an applied
+        font is validated against - the fontTable/theme/Arial baseline, widened, never
+        narrowed);
+      - ``sizes``: every run size the shell's OWN runs carry, in HALF-POINTS (the unit
+        :data:`theme.fonts.body.size_hp` and ``role.appearance.size_hp`` use);
+      - ``hexes``: every explicit run hex the shell carries (normalized ``RRGGBB``);
+      - ``palette``: the parsed ``clrScheme`` slot -> normalized hex (the theme palette a
+        theme-token color resolves against).
+    """
+
+    fonts: set[str]
+    sizes: set[int]
+    hexes: set[str]
+    palette: dict[str, str]
+
+
+def _docx_collect_appearance_facts(shell, profile: dict) -> ShellAppearanceFacts:
+    """The docx appearance facts, BYTE-IDENTICALLY composed from the existing docx
+    shell readers (``_docx_shell_fonts`` + ``_docx_shell_run_sizes_and_hexes`` +
+    ``_docx_theme_palette``). No new docx parsing: this is a pure assembly so the docx
+    verify verdict is unchanged."""
+    fonts = _docx_shell_fonts(shell, profile)
+    sizes, hexes = _docx_shell_run_sizes_and_hexes(shell)
+    palette = _docx_theme_palette(shell)
+    return ShellAppearanceFacts(fonts=fonts, sizes=sizes, hexes=hexes, palette=palette)
+
+
+# pptx ``a:rPr@sz`` / ``a:defRPr@sz`` are in CENTIPOINTS (1/100 pt); the engine's
+# size unit is HALF-POINTS, so a value divides by 50 (e.g. 1800 -> 36 half-points).
+_PPTX_SZ_PER_HALF_POINT = 50
+_PPTX_SLIDE_PART = re.compile(r"ppt/slides/slide\d+\.xml")
+
+
+def _pptx_collect_appearance_facts(shell, profile: dict) -> ShellAppearanceFacts:
+    """The pptx appearance facts, read from the deck's own parts.
+
+    - ``fonts``: every ``a:latin@typeface`` in the theme major/minor font scheme
+      (``ppt/theme/theme1.xml``), widened by the Arial baseline and the profile's
+      captured ``theme.fonts.major/minor.latin`` (the allow-set, never narrowed);
+    - ``sizes``: every ``a:rPr@sz`` / ``a:defRPr@sz`` across the slide parts,
+      converted from centipoints to half-points (``÷50``);
+    - ``hexes``: every ``a:srgbClr@val`` under a run/defRPr ``a:solidFill`` on the
+      slides, normalized;
+    - ``palette``: the parsed clrScheme of the deck's theme.
+    """
+    fonts: set[str] = {"Arial"}
+    theme_fonts = (profile.get("theme") or {}).get("fonts") or {}
+    for key in ("major", "minor"):
+        latin = (theme_fonts.get(key) or {}).get("latin")
+        if latin:
+            fonts.add(latin)
+    try:
+        theme_xml = pack.read_part(shell, "ppt/theme/theme1.xml")
+    except KeyError:
+        palette: dict[str, str] = {}
+    else:
+        palette = colorutil.parse_theme_colors(theme_xml)
+        theme_root = pack.parse_xml_bytes(theme_xml)
+        for latin in theme_root.iter(_A("latin")):
+            face = latin.get("typeface")
+            if face:
+                fonts.add(face)
+    sizes: set[int] = set()
+    hexes: set[str] = set()
+    for part in pack.list_parts(shell):
+        if not _PPTX_SLIDE_PART.fullmatch(part):
+            continue
+        root = pack.parse_xml_bytes(pack.read_part(shell, part))
+        for tag in ("rPr", "defRPr"):
+            for rpr in root.iter(_A(tag)):
+                val = rpr.get("sz")
+                if val is None:
+                    continue
+                try:
+                    # round() (not floor //) to match the capture side
+                    # (pptx/typography: round(size.pt * 2) == round(centipoints / 50)),
+                    # so a correctly applied fractional size never spuriously fails closed.
+                    sizes.add(round(int(val) / _PPTX_SZ_PER_HALF_POINT))
+                except (TypeError, ValueError):
+                    continue
+        for srgb in root.iter(_A("srgbClr")):
+            val = srgb.get("val")
+            if not val:
+                continue
+            try:
+                hexes.add(colorutil.normalize_hex(val))
+            except (ValueError, AttributeError):
+                continue
+    return ShellAppearanceFacts(fonts=fonts, sizes=sizes, hexes=hexes, palette=palette)
+
+
+def _xlsx_collect_appearance_facts(shell, profile: dict) -> ShellAppearanceFacts:
+    """The xlsx appearance facts, read from the workbook's own cells/styles/theme.
+
+    - ``fonts``: every ``cell.font.name`` across the materialized cells, widened by
+      each NamedStyle font name and the Arial baseline (the allow-set);
+    - ``sizes``: ``round(font.sz * 2)`` for every explicit cell-font size (half-points,
+      the same unit the xlsx capture records);
+    - ``hexes``: every ``font.color.rgb`` that is an ``'rgb'`` color, 8-digit ARGB
+      alpha stripped, normalized (non-rgb/indexed/auto colors contribute nothing);
+    - ``palette``: the parsed clrScheme of the workbook's theme.
+    """
+    fonts: set[str] = {"Arial"}
+    sizes: set[int] = set()
+    hexes: set[str] = set()
+    wb = load_workbook(shell, data_only=False)
+    # ``wb.named_styles`` is a list of style NAMES (strings); the NamedStyle objects
+    # (which carry the ``.font``) live on ``wb._named_styles``. Guard both for
+    # openpyxl-version robustness - a NamedStyle font widens the allow-set.
+    for style in getattr(wb, "_named_styles", []) or []:
+        font = getattr(style, "font", None)
+        name = getattr(font, "name", None) if font is not None else None
+        if name:
+            fonts.add(name)
+    for ws in wb.worksheets:
+        for cell in ws._cells.values():
+            font = cell.font
+            if font is None:
+                continue
+            if font.name:
+                fonts.add(font.name)
+            if font.sz is not None:
+                try:
+                    sizes.add(round(float(font.sz) * 2))
+                except (TypeError, ValueError):
+                    pass
+            color = getattr(font, "color", None)
+            if color is None or getattr(color, "type", None) != "rgb":
+                continue
+            rgb = color.rgb
+            if not isinstance(rgb, str):
+                continue
+            hexpart = rgb[2:] if len(rgb) == 8 else rgb
+            try:
+                hexes.add(colorutil.normalize_hex(hexpart))
+            except (ValueError, AttributeError):
+                continue
+    try:
+        theme_xml = pack.read_part(shell, "xl/theme/theme1.xml")
+    except KeyError:
+        palette: dict[str, str] = {}
+    else:
+        palette = colorutil.parse_theme_colors(theme_xml)
+    return ShellAppearanceFacts(fonts=fonts, sizes=sizes, hexes=hexes, palette=palette)
+
+
+# The per-kind shell appearance collector (peer of :data:`_COMPONENT_COUNTERS`). Each
+# fills the format-neutral :class:`ShellAppearanceFacts`; the lifted gate dispatches
+# off ``profile['kind']`` and feeds the result into the unchanged membership loops.
+_SHELL_APPEARANCE_COLLECTORS = {
+    schema.Kind.DOCX.value: _docx_collect_appearance_facts,
+    schema.Kind.PPTX.value: _pptx_collect_appearance_facts,
+    schema.Kind.XLSX.value: _xlsx_collect_appearance_facts,
+}
+
+
 def _collect_applied_appearance(
     profile: dict,
 ) -> tuple[list[tuple[str, int]], list[tuple[str, dict]]]:
@@ -376,31 +547,44 @@ def check_appearance_targets(shell, profile: dict) -> list[Finding]:
     not a sanity bound, and fails closed (ERROR) on any applied value the shell does
     not prove it contains - off-brand output stays impossible by construction:
 
-      - FONT: must be in the shell fontTable + theme latin faces + the Arial
-        baseline (the ALLOWED set; the theme declarations widen it, never the
+      - FONT: must be in the shell's available faces (fontTable/theme latin + the
+        Arial baseline; the theme declarations widen the ALLOWED set, never the
         checked set).
-      - SIZE: the applied ``size_hp`` must be a ``w:sz@w:val`` actually present on
-        the template's ``document.xml`` runs.
-      - COLOR (hex): the applied hex must be a theme-palette hex OR a ``w:color``
-        actually present on the template's runs.
+      - SIZE: the applied ``size_hp`` must be a run size actually present on the
+        template's own runs.
+      - COLOR (hex): the applied hex must be a theme-palette hex OR a hex actually
+        present on the template's runs.
       - COLOR (theme token): the token's mapped ``clrScheme`` slot
         (:data:`_WML_THEME_TO_SLOT`) must be present in the parsed palette.
 
-    A no-op when no appearance value is present (every pre-capture profile), and for
-    non-docx kinds.
+    Format-neutral: the per-kind :data:`_SHELL_APPEARANCE_COLLECTORS` reduce the shell
+    to one :class:`ShellAppearanceFacts` shape (docx/pptx/xlsx) and the membership loops
+    below are kind-agnostic. A collector that cannot parse fails CLOSED - it emits a
+    WARNING and yields empty fact sets, so every applied value is then rejected (ERROR).
+
+    A no-op when no appearance value is present (every pre-capture profile), when the
+    shell is absent, or when the kind has no registered collector.
     """
-    if shell is None or profile.get("kind") != schema.Kind.DOCX.value:
+    if shell is None:
         return []
+    collector = _SHELL_APPEARANCE_COLLECTORS.get(profile.get("kind"))
+    if collector is None:
+        return []
+    findings: list[Finding] = []
     try:
-        available = _docx_shell_fonts(shell, profile)
+        facts = collector(shell, profile)
     except Exception as exc:  # opening the shell must never crash the gate
-        return [
+        # Fail closed: surface the parse failure and continue with empty fact sets, so
+        # any applied font/size/color is rejected below rather than silently passing.
+        findings.append(
             Finding(
                 "appearance_targets_exist",
                 schema.Severity.WARNING.value,
-                f"could not verify fonts against shell: {exc}",
+                f"could not verify appearance targets against shell: {exc}",
             )
-        ]
+        )
+        facts = ShellAppearanceFacts(fonts=set(), sizes=set(), hexes=set(), palette={})
+    available = facts.fonts
     applied: list[tuple[str, str]] = []
     for rid, entry in (profile.get("roles") or {}).items():
         if rid == "_index" or not isinstance(entry, dict):
@@ -414,7 +598,6 @@ def check_appearance_targets(shell, profile: dict) -> list[Finding]:
     if body_latin:
         applied.append(("theme.fonts.body", body_latin))
 
-    findings: list[Finding] = []
     for where, font in applied:
         if font not in available:
             findings.append(
@@ -428,17 +611,7 @@ def check_appearance_targets(shell, profile: dict) -> list[Finding]:
 
     applied_sizes, applied_colors = _collect_applied_appearance(profile)
     if applied_sizes or applied_colors:
-        try:
-            shell_sizes, shell_hexes = _docx_shell_run_sizes_and_hexes(shell)
-            palette = _docx_theme_palette(shell)
-        except Exception as exc:  # opening the shell must never crash the gate
-            return findings + [
-                Finding(
-                    "appearance_targets_exist",
-                    schema.Severity.WARNING.value,
-                    f"could not verify run size/color against shell: {exc}",
-                )
-            ]
+        shell_sizes, shell_hexes, palette = facts.sizes, facts.hexes, facts.palette
         for where, size_hp in applied_sizes:
             if size_hp not in shell_sizes:
                 findings.append(

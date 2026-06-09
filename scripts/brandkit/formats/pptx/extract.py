@@ -7,8 +7,10 @@ from pathlib import Path
 from pptx import Presentation
 
 from brandkit.common import color
+from brandkit.common import typography as common_typography
 from brandkit.formats import catalog
 from brandkit.formats.pptx import structure
+from brandkit.formats.pptx import typography
 from brandkit.ooxml import pack
 from brandkit.profile import schema, store
 
@@ -24,6 +26,27 @@ def extract(
     prs = Presentation(template_path)
     layouts = _layouts(prs)
     roles = _roles(prs, layouts)
+    # The pptx theme block (parsed clrScheme + the seeded palette floor). Built here
+    # so the capture pass below can fold the deck's DIRECT run typography on top of
+    # the seed floor before the envelope is assembled (same shape docx fills).
+    theme = _theme(template_path)
+    # Capture the deck's REAL visible run typography (font, size, color) into
+    # theme.fonts.body / theme.text.body / role.appearance, then fold observed run
+    # colors into theme.palette on top of the seed floor. Additive and deterministic:
+    # a deck with no dominant direct value leaves the body keys untouched, and the
+    # palette _palette_entry get-or-create is idempotent over the seed. pptx roles use
+    # placeholder resolvers (no per-run style identity), so role_style_key yields None:
+    # the body capture is the primary pptx appearance source (run-level color rarely
+    # surfaces; most brand color lives in layout/master placeholders as inherited).
+    common_typography.capture_appearance(
+        typography.iter_run_facts(prs),
+        roles,
+        theme,
+        role_style_key=lambda _entry: None,
+    )
+    common_typography.capture_palette_facts(
+        typography.iter_run_facts(prs), roles, theme
+    )
     # Format-uniform comprehension inventories (schema 1.2.0, plan §4 / M-i-7).
     # Every load-bearing ref the model writes binds to one of these ids; the
     # validator checks membership. They are the PPTX peers of the docx
@@ -61,7 +84,7 @@ def extract(
             "filename": template_path.name,
             "sha256": store.sha256_file(template_path),
         },
-        theme=_theme(template_path),
+        theme=theme,
         roles=roles,
         surface=surface,
         structure=skeleton,

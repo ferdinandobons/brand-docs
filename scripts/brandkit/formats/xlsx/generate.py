@@ -17,6 +17,7 @@ deterministic path fills exactly the named cells/regions the grid names.
 
 from __future__ import annotations
 
+import copy
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,8 +33,11 @@ from openpyxl.chart import (
     PieChart,
     Reference,
 )
+from openpyxl.styles import Color, Font
 from openpyxl.utils.cell import range_boundaries
 
+from brandkit.common import appearance
+from brandkit.common import color as colorutil
 from brandkit.grid.model import GridDocument
 from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
@@ -103,6 +107,11 @@ def generate(
             mask = _resolve_number_mask(resolver, grid.formats.get(name), name, sink)
             if mask:
                 cell.number_format = mask
+            # Brand appearance (font/size/color) AFTER the cover-style re-assert so the
+            # named-style re-assert is never clobbered; set-only-when-unset preserves
+            # any axis the style already carries. Only on a cell we actually wrote
+            # (never a preserved-formula / merged slave).
+            _brand_cell_appearance(resolver, name_to_role, name, cell, sink)
 
     # Fill multi-cell named regions (bounds-guarded; never overruns the range).
     # Same formula guard as the single-cell loop: a region named over a block that
@@ -125,8 +134,12 @@ def generate(
                 wrote = _fill_cell(cell, value, sink=sink, where=name)
                 # Only format cells we actually wrote: never clobber a preserved
                 # formula cell's (or a merged slave's) own format.
-                if wrote and region_mask:
-                    cell.number_format = region_mask
+                if wrote:
+                    if region_mask:
+                        cell.number_format = region_mask
+                    # Brand appearance on each cell we wrote, gated set-only-when-unset
+                    # so an inherited-but-correct region style is never clobbered.
+                    _brand_cell_appearance(resolver, name_to_role, name, cell, sink)
 
     # Native charts over the workbook's OWN cell data (after the fills, so the
     # referenced ranges carry the new values). The chart inherits the workbook
@@ -477,6 +490,140 @@ def _reassert_cover_style(cell, style_id: Optional[str]) -> None:
     """
     if style_id and not isinstance(cell, MergedCell) and cell.style != style_id:
         cell.style = style_id
+
+
+def _xlsx_mutable_font(cell) -> Font:
+    """A mutable :class:`~openpyxl.styles.Font` carrying the cell's EXPLICIT font.
+
+    openpyxl exposes ``cell.font`` as an immutable ``StyleProxy``; to set one axis
+    you reassign a fresh ``Font``. A cell with an explicit style is copied verbatim
+    (so an already-set axis - bold, an existing name - is preserved when another axis
+    is branded); an UNSTYLED cell (``has_style is False``) yields a blank ``Font()``
+    rather than openpyxl's SYNTHESIZED ``Calibri``/``theme=1`` default, so branding
+    one axis does not bake the library default into the other axes - they stay
+    inherited from the workbook default exactly as before the write."""
+    if getattr(cell, "has_style", False):
+        return copy.copy(cell.font)
+    return Font()
+
+
+def _xlsx_set_cell_color(cell, ref: dict, findings: list[Finding]) -> None:
+    """Write ``cell``'s font color from the resolved palette ``ref`` (the caller has
+    already confirmed the cell carries no explicit color).
+
+    A hex ref is applied as an opaque ARGB ``Color(rgb='FF' + RRGGBB)``. A THEME ref
+    is REALIZED via the resolver-enriched concrete hex (``_enrich_theme_hex`` already
+    attaches it) rather than ``Color(theme=int)``: openpyxl's cell theme INDEX order is
+    NOT clrScheme document order (Excel swaps the first dark/light pairs - see
+    ``xlsx/typography._XLSX_THEME_INDEX``), so realizing a slot via the enriched hex
+    avoids the index entirely (the same fallback the docx leg uses for slot-only
+    tokens). A theme token with no resolvable hex, or a malformed hex, is
+    left inherited with a graceful INFO finding - the writer NEVER fabricates a color.
+    The value is read STRICTLY from the resolver ref, never a literal in the engine."""
+    kind = ref.get("kind")
+    hexval = ref.get("hex")
+    if kind == "theme" and not hexval:
+        findings.append(
+            Finding(
+                check="appearance_color_skipped",
+                severity=schema.Severity.INFO.value,
+                message=(
+                    f"captured theme color token {ref.get('theme')!r} has no "
+                    "resolvable hex for xlsx; left inherited"
+                ),
+            )
+        )
+        return
+    if not hexval:
+        return
+    try:
+        normalized = colorutil.normalize_hex(hexval)
+    except (ValueError, AttributeError):
+        findings.append(
+            Finding(
+                check="appearance_color_skipped",
+                severity=schema.Severity.INFO.value,
+                message=(
+                    f"captured hex color {hexval!r} is not a valid RRGGBB; "
+                    "left inherited"
+                ),
+            )
+        )
+        return
+    font = _xlsx_mutable_font(cell)
+    font.color = Color(rgb="FF" + normalized)
+    cell.font = font
+
+
+class _XlsxAppearanceBackend:
+    """The xlsx hook set the format-neutral ``common.appearance`` orchestration drives.
+
+    A spreadsheet cell IS its own single run, so ``runs_of`` yields ``[cell]`` and the
+    per-axis writers reassign the cell's font (openpyxl fonts are immutable). The
+    set-only-when-unset probes treat a cell with NO explicit style as fully unset (its
+    ``cell.font`` is only openpyxl's synthesized default, not a brand fact, mirroring
+    docx's ``run.font.<axis> is None`` "inherited" sense); for a styled cell each axis
+    is unset only when the explicit font leaves it ``None``. The size writer inverts the
+    capture-side ``round(sz * 2)`` via ``half_pts / 2`` points; the color writer prefers
+    the resolver-enriched hex for a theme token. Branding only an UNSET axis means an
+    inherited-but-correct workbook/style value is never clobbered, and an empty
+    appearance is a byte-identical no-op."""
+
+    def runs_of(self, target):
+        return [target]
+
+    def font_unset(self, cell) -> bool:
+        return not getattr(cell, "has_style", False) or cell.font.name is None
+
+    def set_font(self, cell, latin: str) -> None:
+        font = _xlsx_mutable_font(cell)
+        font.name = latin
+        cell.font = font
+
+    def size_unset(self, cell) -> bool:
+        return not getattr(cell, "has_style", False) or cell.font.sz is None
+
+    def set_size(self, cell, half_pts: int) -> None:
+        font = _xlsx_mutable_font(cell)
+        font.sz = half_pts / 2
+        cell.font = font
+
+    def color_unset(self, cell) -> bool:
+        if not getattr(cell, "has_style", False):
+            return True
+        color = cell.font.color
+        return color is None or color.type is None
+
+    def set_color(self, cell, ref: dict, findings) -> None:
+        _xlsx_set_cell_color(cell, ref, findings)
+
+
+XLSX_BACKEND = _XlsxAppearanceBackend()
+
+
+def _brand_cell_appearance(
+    resolver: ProfileResolver,
+    name_to_role: dict[str, str],
+    name: str,
+    cell,
+    findings: list[Finding],
+) -> None:
+    """Brand a freshly-filled ``cell``'s font/size/color from its role's resolved op.
+
+    Routes through the SHARED ``common.appearance`` orchestration (the same writer the
+    docx/pptx legs use), driven by :data:`XLSX_BACKEND` and gated set-only-when-unset.
+    The role's appearance comes ONLY from the resolver (the captured body font for a
+    ``named_range`` role; the resolver's family gate keeps the body size/color off
+    non-paragraph roles), never a literal here, so off-brand output stays impossible.
+    A name with no mapped role, or a pre-capture profile with empty appearance, is a
+    no-op - output stays byte-identical to today. The caller has already confirmed a
+    value was written, so this never touches a preserved-formula / merged slave cell.
+    """
+    rid = name_to_role.get(name)
+    if rid is None:
+        return
+    op = resolver.resolve_role(rid, fallback=None)
+    appearance.apply_role_appearance(XLSX_BACKEND, cell, op, findings)
 
 
 def _holds_formula(cell) -> bool:

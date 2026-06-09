@@ -58,10 +58,14 @@ from typing import Optional
 
 from pptx import Presentation
 from pptx.chart.data import CategoryChartData
+from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.enum.dml import MSO_THEME_COLOR
 from pptx.enum.shapes import MSO_SHAPE, PP_PLACEHOLDER
+from pptx.util import Pt
 
-from brandkit.common import text as textutil
+from brandkit.common import appearance, text as textutil
+from brandkit.common import color as colorutil
 from brandkit.common.links import is_safe_link_url
 from brandkit.formats.pptx import structure
 from brandkit.ir import components
@@ -163,11 +167,25 @@ def generate(
 
     if store.comprehension_is_present(profile):
         _generate_reconciled(
-            prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
+            prs,
+            profile,
+            idoc,
+            cover_layout,
+            content_layout,
+            body_ph_idx,
+            sink,
+            resolver,
         )
     else:
         _generate_deterministic(
-            prs, profile, idoc, cover_layout, content_layout, body_ph_idx, sink
+            prs,
+            profile,
+            idoc,
+            cover_layout,
+            content_layout,
+            body_ph_idx,
+            sink,
+            resolver,
         )
 
     # Component survival (a native table/chart/picture in the shell with no
@@ -194,7 +212,14 @@ def generate(
 # Deterministic path (comprehension ABSENT) - today's behavior, byte-identical
 # ---------------------------------------------------------------------------
 def _generate_deterministic(
-    prs, profile: dict, idoc, cover_layout, content_layout, body_ph_idx, sink: list
+    prs,
+    profile: dict,
+    idoc,
+    cover_layout,
+    content_layout,
+    body_ph_idx,
+    sink: list,
+    resolver=None,
 ) -> None:
     """Blind rebuild: clear all slides, build cover + one content slide per heading.
 
@@ -220,14 +245,23 @@ def _generate_deterministic(
             if sub is not None:
                 _set_placeholder_text(sub, textutil.runs_to_text(idoc.cover.subtitle))
 
-    _append_content_slides(prs, profile, idoc, content_layout, body_ph_idx, sink)
+    _append_content_slides(
+        prs, profile, idoc, content_layout, body_ph_idx, sink, resolver
+    )
 
 
 # ---------------------------------------------------------------------------
 # Reconcile path (comprehension PRESENT) - keep structural, fill cover, regen agenda
 # ---------------------------------------------------------------------------
 def _generate_reconciled(
-    prs, profile: dict, idoc, cover_layout, content_layout, body_ph_idx, sink: list
+    prs,
+    profile: dict,
+    idoc,
+    cover_layout,
+    content_layout,
+    body_ph_idx,
+    sink: list,
+    resolver=None,
 ) -> None:
     """Reconcile the preserved deck with the new content (plan §6).
 
@@ -250,7 +284,9 @@ def _generate_reconciled(
     removed_region_refs = _clear_demo_slides(prs, comp, sink)
 
     # 3) Append the new body content after the kept slides.
-    _append_content_slides(prs, profile, idoc, content_layout, body_ph_idx, sink)
+    _append_content_slides(
+        prs, profile, idoc, content_layout, body_ph_idx, sink, resolver
+    )
 
     # 4) Regenerate the agenda / section-list index from the NEW headings (the PPTX
     # peer of refreshing the docx outline TOC). No-op when the deck has no section
@@ -514,7 +550,7 @@ def _existing_agenda_slide(prs, body_ph_idx: Optional[int] = None):
 # Shared content-slide builder (both paths append body content the same way)
 # ---------------------------------------------------------------------------
 def _append_content_slides(
-    prs, profile: dict, idoc, content_layout, body_ph_idx, sink: list
+    prs, profile: dict, idoc, content_layout, body_ph_idx, sink: list, resolver=None
 ) -> None:
     """Append one content slide per IR heading-section (capacity-split).
 
@@ -525,9 +561,15 @@ def _append_content_slides(
     The body placeholder is chosen by the profile-resolved ``body_ph_idx`` when the
     slide carries that index (the schema's source of truth), falling back to the
     positional first body placeholder only when no named idx is present.
+
+    When ``resolver`` is supplied, the ``paragraph`` role is resolved ONCE here and
+    threaded into the body writer so each body paragraph's still-unset font/size/color
+    axes can be branded from the captured appearance. A pre-capture profile resolves to
+    an empty appearance, so the apply pass is a byte-identical no-op.
     """
     capacity = _body_capacity(profile)
     layout = content_layout or prs.slide_layouts[0]
+    body_op = resolver.resolve_role("paragraph", fallback=None) if resolver else None
     for section in _sections(idoc.blocks):
         chunks = _content_chunks(section["body"], capacity, sink)
         for page, chunk in enumerate(chunks):
@@ -552,7 +594,9 @@ def _append_content_slides(
                 _add_native_smartart(slide, prs, chunk.smartart, body, sink)
             elif chunk.lines:
                 if body is not None:
-                    _write_body_lines(body, chunk.lines)
+                    _write_body_lines(
+                        body, chunk.lines, resolver=resolver, op=body_op, sink=sink
+                    )
                 else:
                     # No body placeholder on this layout: surface the unplaced body
                     # text rather than dropping it silently (the engine invariant).
@@ -909,7 +953,9 @@ def _table_bounds(prs, body_placeholder=None) -> tuple[int, int, int, int]:
     )
 
 
-def _write_body_lines(body, lines: list[BodyLine]) -> None:
+def _write_body_lines(
+    body, lines: list[BodyLine], *, resolver=None, op=None, sink=None
+) -> None:
     """Write ``lines`` as one body-placeholder paragraph each, applying levels.
 
     The first line reuses the placeholder's existing first paragraph (keeping its
@@ -917,6 +963,12 @@ def _write_body_lines(body, lines: list[BodyLine]) -> None:
     ``text_frame.add_paragraph``. Every paragraph's ``level`` is set from the line's
     ``indent`` so a list item renders at its real depth and the layout supplies the
     bullet glyph and indentation.
+
+    ``resolver``/``op``/``sink`` (when given) thread captured brand APPEARANCE through
+    to :func:`_set_para_runs`, which brands each run's still-unset font/size/color
+    axis. They are only consumed on the run-rebuild paths (a line carrying IR runs);
+    the plain-text fast path leaves the placeholder's inherited formatting untouched,
+    exactly as before.
     """
     if not getattr(body, "has_text_frame", False) or not lines:
         return
@@ -926,7 +978,7 @@ def _write_body_lines(body, lines: list[BodyLine]) -> None:
         extra._p.getparent().remove(extra._p)
     first = tf.paragraphs[0]
     if lines[0].runs:
-        _set_para_runs(first, lines[0].runs)
+        _set_para_runs(first, lines[0].runs, resolver=resolver, op=op, sink=sink)
     elif first.runs:
         first.runs[0].text = lines[0].text
         for r in first.runs[1:]:
@@ -937,20 +989,142 @@ def _write_body_lines(body, lines: list[BodyLine]) -> None:
     for line in lines[1:]:
         para = tf.add_paragraph()
         if line.runs:
-            _set_para_runs(para, line.runs)
+            _set_para_runs(para, line.runs, resolver=resolver, op=op, sink=sink)
         else:
             para.text = line.text
         para.level = max(line.indent, 0)
 
 
-def _set_para_runs(para, runs) -> None:
+# PPTX's OWN theme-token map: each canonical clrScheme slot token the capture side
+# normalizes to (``dk1``/``lt1``/``accent1``/``hlink``/...) keyed to the
+# ``MSO_THEME_COLOR`` member python-pptx applies via ``run.font.color.theme_color``.
+# This is built from python-pptx's enum and is DISTINCT from the docx
+# WordprocessingML map (``_WML_TOKEN_TO_THEME_COLOR``) - the two namespaces are never
+# reconciled. ``NOT_THEME_COLOR``/``MIXED`` (xml_value '') are excluded so an
+# unmappable token falls through to the enriched-hex realization below.
+_PPTX_TOKEN_TO_THEME_COLOR = {
+    member.xml_value: member
+    for member in MSO_THEME_COLOR
+    if getattr(member, "xml_value", None)
+    and member not in (MSO_THEME_COLOR.NOT_THEME_COLOR, MSO_THEME_COLOR.MIXED)
+}
+
+
+def _pptx_set_run_color(run, ref: dict, findings: list) -> None:
+    """Write ``run.font.color`` from the resolved palette ``ref`` (the caller has
+    already confirmed the run carries no explicit color).
+
+    A hex ref is applied via ``run.font.color.rgb`` (normalized RRGGBB). A theme-token
+    ref is mapped through PPTX's OWN :data:`_PPTX_TOKEN_TO_THEME_COLOR` to an
+    ``MSO_THEME_COLOR`` member and applied via ``run.font.color.theme_color``; a token
+    that does not map is REALIZED via the resolver-enriched concrete hex when present,
+    else left inherited with an INFO finding (mirroring the docx leg). The value is
+    read STRICTLY from the resolver ref - never a literal in the engine - so a
+    malformed hex fails CLOSED (INFO skip) rather than raising."""
+    kind = ref.get("kind")
+    if kind == "hex":
+        _pptx_apply_hex(run, ref.get("hex"), findings)
+        return
+    if kind == "theme":
+        token = ref.get("theme")
+        member = _PPTX_TOKEN_TO_THEME_COLOR.get(token)
+        if member is not None:
+            run.font.color.theme_color = member
+            return
+        # A token PowerPoint's own theme-color enum cannot express: realize the brand
+        # color via the resolver-enriched concrete hex rather than dropping it to
+        # inherited (the same fallback the docx leg uses for slot-only tokens).
+        hexval = ref.get("hex")
+        if hexval and _pptx_apply_hex(run, hexval, findings, _silent=True):
+            return
+        findings.append(
+            Finding(
+                "appearance_color_skipped",
+                schema.Severity.INFO.value,
+                f"captured theme color token {token!r} does not map to a pptx "
+                "theme color and has no resolvable hex; left inherited",
+            )
+        )
+
+
+def _pptx_apply_hex(run, hexval, findings: list, *, _silent: bool = False) -> bool:
+    """Apply a normalized RRGGBB ``hexval`` to ``run.font.color.rgb``; return whether
+    it landed.
+
+    A malformed hex fails CLOSED: an INFO ``appearance_color_skipped`` finding (unless
+    ``_silent``, used by the theme-token fallback which appends its own finding) and
+    the run is left inherited rather than letting a bad value raise mid-generation."""
+    if not hexval:
+        return False
+    try:
+        run.font.color.rgb = RGBColor.from_string(colorutil.normalize_hex(hexval))
+        return True
+    except (ValueError, AttributeError):
+        if not _silent:
+            findings.append(
+                Finding(
+                    "appearance_color_skipped",
+                    schema.Severity.INFO.value,
+                    f"captured hex color {hexval!r} is not a valid RRGGBB; "
+                    "left inherited",
+                )
+            )
+        return False
+
+
+class _PptxAppearanceBackend:
+    """The pptx hook set the format-neutral ``common.appearance`` orchestration drives.
+
+    A pptx paragraph's runs ARE its ``a:r`` runs; the set-only-when-unset probes read
+    ``run.font.name``/``.size``/``.color.type`` (all ``None`` when the run inherits the
+    layout/master placeholder formatting). The writers set the font name, the size via
+    ``Pt(half_pts / 2)`` (the capture-side ``round(pt * 2)`` inverse), and the color
+    via PPTX's OWN theme map / hex realization. Branding only an UNSET axis means an
+    inherited-but-correct theme value (the common case for a deck, where brand color
+    lives in the master) is never clobbered, and an empty appearance is a
+    byte-identical no-op."""
+
+    def runs_of(self, target):
+        return target.runs
+
+    def font_unset(self, run) -> bool:
+        return run.font.name is None
+
+    def set_font(self, run, latin: str) -> None:
+        run.font.name = latin
+
+    def size_unset(self, run) -> bool:
+        return run.font.size is None
+
+    def set_size(self, run, half_pts: int) -> None:
+        run.font.size = Pt(half_pts / 2)
+
+    def color_unset(self, run) -> bool:
+        return run.font.color.type is None
+
+    def set_color(self, run, ref: dict, findings) -> None:
+        _pptx_set_run_color(run, ref, findings)
+
+
+PPTX_BACKEND = _PptxAppearanceBackend()
+
+
+def _set_para_runs(para, runs, *, resolver=None, op=None, sink=None) -> None:
     """Write IR ``runs`` into a pptx paragraph as real runs, preserving inline
     emphasis (bold/italic/underline) and hyperlinks, instead of a flat string.
 
     Existing runs are cleared first; the fresh runs inherit the placeholder's brand
     font and color from the layout's level formatting, and only the author's emphasis
     toggles + link target are set - never a literal brand font/color (guarantee holds).
+
+    When ``resolver`` is supplied, captured brand APPEARANCE is applied on top, exactly
+    as the docx leg does and gated identically (set-only-when-unset, so an inherited
+    master/layout value is never clobbered): each run's per-run ``color`` palette TOKEN
+    is resolved and applied first (first-writer-wins precedence), then the paragraph's
+    resolved-role ``op`` brands any still-unset font/size/color axis. No resolver (or a
+    pre-capture profile with empty appearance) leaves output byte-identical to today.
     """
+    findings = sink if sink is not None else []
     for r in list(para.runs):
         r._r.getparent().remove(r._r)
     for ir_run in runs or []:
@@ -971,6 +1145,14 @@ def _set_para_runs(para, runs) -> None:
         # untrusted content cannot smuggle a hostile link into the deck.
         if link and is_safe_link_url(link):
             run.hyperlink.address = link
+        # Per-run COLOR token (model-driven): resolved to its captured ref and applied
+        # first, so an explicit run token wins over the role's body/default color.
+        color = appearance.resolve_run_color(resolver, ir_run.get("color"), findings)
+        appearance.apply_run_color(PPTX_BACKEND, run, color, findings)
+    # Role/body appearance: brand each still-unset font/size/color axis from the
+    # resolved op. A None op (no resolver) or empty appearance is a no-op.
+    if op is not None:
+        appearance.apply_role_appearance(PPTX_BACKEND, para, op, findings)
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,29 @@
 
 All notable changes to BrandDocs are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **Cross-format appearance vertical (pptx + xlsx now capture, apply, and verify
+  brand typography/color).** The role typography (font/size/color) and model-driven
+  run color that shipped for docx in 0.7.0 now work on PowerPoint and Excel too. The
+  docx capture/apply helpers were extracted into shared `common/typography.py` +
+  `common/appearance.py` (docx output stays byte-identical, guarded by a frozen-hash
+  anchor test); pptx and xlsx gained capture adapters that populate the same
+  `role.appearance` + `theme.palette` shape and a per-format apply backend that
+  consumes `op.appearance` + the resolver's color, set-only-when-unset (an inherited
+  theme value is never clobbered). `check_appearance_targets` is now format-neutral:
+  a per-kind shell-fact collector re-validates every applied font/size/color against
+  each shell's own facts, fail-closed. The model's `palette_annotations` naming is
+  now load-bearing on all three formats. Schema stays 1.2.0 (additive); a profile
+  with no captured appearance generates byte-identically as before.
+  - **Universal, not tuned:** capture is a dominance statistic over the template's
+    own runs/cells; nothing is hardcoded. Excel's cell theme-color index (which swaps
+    the first dark/light pairs vs clrScheme order) is mapped correctly so a default
+    `theme=1` text color is captured as `dk1`, not `lt1`.
+  - **Still docx-only:** caption-index regeneration (the `SEQ` field machinery).
+
 ## [0.7.0] - 2026-06-09
 
 Brand-fidelity release: the engine now follows a template's real per-run typography
