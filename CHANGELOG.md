@@ -6,6 +6,39 @@ All notable changes to BrandDocs are documented in this file.
 
 ### Added
 
+- **Off-theme accent reachability via palette aliases (all three formats, Cluster E1).** An
+  off-theme brand accent the template uses in content is captured as a `hex:RRGGBB`
+  `theme.palette` entry, which is harder to ADDRESS as a named run color than a clrScheme
+  theme slot (`accent1` ...). E1 lets the model propose a human/semantic **alias** for such a
+  captured entry, and the engine mints a syntactically-legal dotted token in `theme.palette`
+  whose `ref` is COPIED BYTE-IDENTICAL from the captured entry's `ref` - so the accent becomes
+  addressable as a clean run-color token, WITHOUT the model ever authoring a hex.
+  - **Annotation:** `comprehension.palette_annotations[<palette-id>]` gains an optional
+    `alias` directive (a dotted token name). It is additive and absent by default; the model
+    NAMES the alias, never a color value.
+  - **Mint:** a new `comprehension._derive_palette_aliases` runs in `merge()` immediately after
+    `_derive_palette_annotations`, in the SAME all-or-nothing transaction. For each annotation
+    carrying an `alias`, it mints `theme.palette[alias]` with the captured `ref` deep-copied, a
+    `palette.alias` provenance fact recording the source key, the source `frequency`, and all
+    advisory fields null (a pure BRIDGE token). The mint is idempotent and refuses to shadow a
+    non-alias key.
+  - **Resolve (zero resolver change):** `resolve_color(token)` still reads
+    `theme.palette[token]['ref']` verbatim - an alias is just another palette key, so it is
+    addressable identically on docx / pptx / xlsx through the shared resolver and
+    `appearance.apply_run_color`.
+  - **Verify:** `comprehension.check_membership` rejects an alias whose token is syntactically
+    illegal, collides with an existing palette key / role id, or is proposed twice (fail-closed
+    at merge); a new fail-closed L0 check `check_palette_alias_targets`
+    (gate-wired as `palette_alias_targets_exist`, listed in `DEFAULT_L0_INVARIANTS`) verifies at
+    QA time that every minted alias token is a legal dotted token whose minted `ref` is
+    byte-identical to its declared source entry's `ref` (an invented or diverged ref is an
+    ERROR). An alias to a non-captured palette key is rejected by the existing
+    `palette_annotations` membership check; an empty palette fails closed.
+  - **Universal + additive:** schema stays at 1.2.0 (the `alias` field and the minted tokens
+    are additive within the existing 1.2.0 `comprehension` / `theme.palette`). A profile that
+    carries no alias mints NO new palette key, so generation stays byte-identical (the frozen
+    anchor stays green). The model bundle's `reference/comprehension.md` (all three byte-identical
+    copies) documents the `alias` annotation.
 - **List / numbering-definition fidelity is now a captured brand axis (DOCX only, Cluster
   D3).** The same dominant-capture + appearance-seam + fail-closed-check pattern that ships
   for font/size/color/geometry/table now also covers a generated list's NUMBERING facts, so

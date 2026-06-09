@@ -49,12 +49,15 @@ MIN_DOMINANCE = 0.6  # the winner must cover >= 60% of those values
 MIN_ACCENT_RUNS = 3
 
 # The closed ``where`` vocabulary for a palette entry's provenance (LOCKED). Every
-# provenance fact is one of these four observed sources; nothing else may be
-# recorded. ``palette_role`` is the only NON-authoritative source (the hardcoded,
-# template-invariant ``theme.palette_roles`` map), recorded for context but never
-# trusted as brand evidence.
+# provenance fact is one of these four observed sources, plus the engine-minted
+# ``palette.alias`` (Cluster E1); nothing else may be recorded. ``palette_role`` is
+# the only NON-authoritative observed source (the hardcoded, template-invariant
+# ``theme.palette_roles`` map), recorded for context but never trusted as brand
+# evidence. ``palette.alias`` is stamped by the merge-time alias mint on a token the
+# model NAMED for a captured entry; the alias ref is a byte-copy of that entry's ref,
+# never an observed capture (kept in sync with ``schema.PALETTE_WHERE``).
 PALETTE_WHERE: frozenset[str] = frozenset(
-    {"palette_role", "role.appearance", "run.color", "link.color"}
+    {"palette_role", "role.appearance", "run.color", "link.color", "palette.alias"}
 )
 
 

@@ -296,6 +296,37 @@ class XlsxSetCellColorTest(unittest.TestCase):
         self.assertEqual([f.check for f in sink], ["appearance_color_skipped"])
         self.assertEqual(sink[0].severity, schema.Severity.INFO.value)
 
+    def test_minted_palette_alias_resolves_as_cell_color(self) -> None:
+        """Cluster E1 cross-format leg: an off-theme ``hex:RRGGBB`` accent the model
+        NAMED an ALIAS for (minted via the real merge path, ref byte-copied) is
+        addressable as a clean dotted run-color token on xlsx through the SAME shared
+        resolver and applies as the captured ARGB (zero resolver change)."""
+        from brandkit.profile import comprehension as comp_mod
+        from brandkit.profile.resolver import ProfileResolver
+
+        profile = schema.build_envelope("xlsx", {"name": "t"})
+        profile["provenance"]["shell"]["sha256"] = "abc"
+        profile["theme"]["palette"] = {
+            "hex:0B5394": {
+                "ref": {"kind": "hex", "hex": "0B5394"},
+                "provenance": [{"where": "run.color", "detail": "body"}],
+                "frequency": "accent",
+            }
+        }
+        res = comp_mod.merge(
+            profile,
+            {"palette_annotations": {"hex:0B5394": {"alias": "accent.brandblue"}}},
+        )
+        self.assertTrue(res.ok, res.problems)
+        resolved = ProfileResolver(profile).resolve_color("accent.brandblue")
+        self.assertEqual(resolved, {"kind": "hex", "hex": "0B5394"})
+        cell = self._cell()
+        sink: list = []
+        xg._xlsx_set_cell_color(cell, resolved, sink)
+        self.assertEqual(cell.font.color.rgb, "FF0B5394")
+        self.assertEqual(cell.font.color.type, "rgb")
+        self.assertEqual(sink, [])
+
     def test_malformed_hex_fails_closed_with_info(self) -> None:
         cell = self._cell()
         sink: list = []

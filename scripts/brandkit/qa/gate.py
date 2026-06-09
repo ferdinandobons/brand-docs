@@ -156,6 +156,13 @@ def run_qa(
     # of theme.palette. No-ops when comprehension is absent, so the model-free CI
     # path and pre-palette profiles are unaffected.
     findings = findings + checks_deterministic.check_color_token_targets(profile)
+    # Fail-closed PALETTE-ALIAS integrity (sibling of color-token targets, Cluster E1):
+    # every model-NAMED alias minted into theme.palette must be a legal dotted token
+    # whose ref is a byte-copy of its captured source entry's ref (the engine never
+    # authors a color). No-ops when comprehension is absent and on annotations with no
+    # alias, so the model-free CI path, pre-palette profiles, pptx/xlsx, and the
+    # no-alias byte-identity path are all unaffected.
+    findings = findings + checks_deterministic.check_palette_alias_targets(profile)
     if extra_findings:
         findings = findings + list(extra_findings)
 

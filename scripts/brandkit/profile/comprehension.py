@@ -25,6 +25,7 @@ frozen here and never re-invoked at generate time (idempotency, §6).
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Optional
 
 from brandkit.profile import schema
@@ -489,12 +490,46 @@ def check_membership(profile: dict, comp: dict) -> list[str]:
     # (e) palette_annotations keys ∈ the surfaced palette inventory (FAIL-CLOSED on
     # empty, same rule as anchor/index/region): the model can NAME only a color the
     # deterministic capture actually observed, never invent a palette key.
-    for key in comp.get("palette_annotations") or {}:
+    seen_aliases: set[str] = set()
+    for key, ann in (comp.get("palette_annotations") or {}).items():
         if key not in palette_ids:
             problems.append(
                 f"comprehension.palette_annotations: palette key {key!r} not in "
                 f"surfaced palette inventory {sorted(palette_ids)}"
             )
+        # (e') An optional ``alias`` is a DIRECTIVE to mint a dotted token aliasing
+        # this captured entry (Cluster E1). The model NAMES the alias only; the engine
+        # copies the captured ref byte-identical. Fail-closed here so a bad alias never
+        # reaches the mint: it must be a syntactically-legal dotted token and must not
+        # collide with an existing palette key, a role id, or another proposed alias.
+        if not isinstance(ann, dict):
+            continue
+        alias = ann.get("alias")
+        if alias is None:
+            continue
+        apath = f"comprehension.palette_annotations.{key}.alias"
+        if not isinstance(alias, str) or not schema.is_valid_role_id(alias):
+            problems.append(
+                f"{apath}: alias token {alias!r} is not a syntactically-legal dotted "
+                "token (must match the palette/role id grammar)"
+            )
+            continue
+        if alias in palette_ids:
+            problems.append(
+                f"{apath}: alias token {alias!r} collides with an existing "
+                f"theme.palette key {sorted(palette_ids)}"
+            )
+        if alias in role_ids:
+            problems.append(
+                f"{apath}: alias token {alias!r} collides with a role id "
+                f"{sorted(role_ids)}"
+            )
+        if alias in seen_aliases:
+            problems.append(
+                f"{apath}: alias token {alias!r} is proposed more than once in this "
+                "comprehension"
+            )
+        seen_aliases.add(alias)
 
     # (f) audit keys ∈ the profile-derived visual checklist (Cluster C1). FAIL-CLOSED
     # on empty, same rule as anchor/index/region: the L2 model may write a verdict
@@ -999,6 +1034,12 @@ def merge(
     _derive_skeleton_attrs(profile, canonical)
     _derive_anchors(profile, canonical)
     _derive_palette_annotations(profile, canonical)
+    # Mint any model-NAMED palette ALIAS tokens (Cluster E1) immediately after the
+    # annotations, in the SAME all-or-nothing transaction: their syntax / collision /
+    # source-membership were already gated by ``check_membership`` above, so a bad
+    # alias rejected the whole comprehension before reaching here. The mint copies the
+    # captured ref byte-identical; the engine never authors a color.
+    _derive_palette_aliases(profile, canonical)
 
     # 4b) Derive the reusable-fragment registries from the canonical fragments.
     # comprehend OWNS components/sections: they are rebuilt deterministically from
@@ -1168,6 +1209,78 @@ def _derive_palette_annotations(profile: dict, comp: dict) -> None:
         for field in schema.PALETTE_ANNOTATION_FIELDS:
             if ann.get(field) is not None:
                 entry[field] = ann[field]
+
+
+def _derive_palette_aliases(profile: dict, comp: dict) -> None:
+    """Mint a model-NAMED alias token into ``theme.palette`` (Cluster E1).
+
+    Off-theme brand accents are captured as ``hex:RRGGBB`` palette entries that are
+    harder to ADDRESS as a named run color than the theme slots (``accent1`` ...).
+    For each ``palette_annotations`` entry carrying an ``alias`` directive, this mints
+    a syntactically-legal dotted token (``alias``) into ``theme.palette`` whose ``ref``
+    is a BYTE-COPY of the captured entry's ``ref`` - so the accent becomes addressable
+    as a clean run-color token, WITHOUT the model ever authoring a hex. The model only
+    NAMES the alias; the engine copies the captured value (the single brand author).
+
+    The alias entry is a pure BRIDGE token: it carries no advisory fields
+    (``name``/``purpose``/``use_when``/``semantic_role`` stay null) and a
+    ``palette.alias`` provenance fact recording the source palette key, so it is never
+    confused for an observed capture. Mirrors :func:`_derive_palette_annotations`'s
+    structure-safe pattern.
+
+    Fail-closed and total: every alias was already validated by
+    :func:`check_membership` (legal dotted syntax, source key real, no collision with a
+    palette key / role id / sibling alias) BEFORE this runs, and ``merge`` rejects the
+    whole comprehension otherwise - so this only ever mints clean aliases. A defensive
+    re-check skips an alias whose source entry / ref is missing or whose token would
+    still collide (idempotent: a re-mint of the same proposal overwrites with a
+    byte-identical bridge entry). Nothing is minted when no annotation carries an
+    ``alias``, so the no-alias path adds NO palette key and stays byte-identical.
+    """
+    palette = (profile.get("theme") or {}).get("palette")
+    if not isinstance(palette, dict):
+        return
+    for key, ann in (comp.get("palette_annotations") or {}).items():
+        if not isinstance(ann, dict):
+            continue
+        alias = ann.get("alias")
+        if not alias or not isinstance(alias, str):
+            continue
+        source = palette.get(key)
+        if not isinstance(source, dict):
+            continue
+        source_ref = source.get("ref")
+        if not isinstance(source_ref, dict):
+            continue
+        # Defensive: never let an alias shadow an EXISTING captured/theme key (a
+        # re-mint of the SAME alias is fine - it overwrites with a byte-identical
+        # bridge entry). check_membership already gated collisions before merge wrote.
+        existing = palette.get(alias)
+        if isinstance(existing, dict) and not _is_alias_entry(existing):
+            continue
+        palette[alias] = {
+            # BYTE-COPY of the captured ref: a deep copy so a later mutation of the
+            # source ref can never leak into the alias (the model never authors this).
+            "ref": copy.deepcopy(source_ref),
+            "provenance": [{"where": "palette.alias", "detail": key}],
+            "frequency": source.get("frequency"),
+            "name": None,
+            "purpose": None,
+            "use_when": None,
+            "semantic_role": None,
+        }
+
+
+def _is_alias_entry(entry: dict) -> bool:
+    """True when ``entry`` is an engine-minted alias bridge (its sole provenance fact
+    is a ``palette.alias`` where), so a re-mint may safely overwrite it idempotently."""
+    prov = entry.get("provenance")
+    return (
+        isinstance(prov, list)
+        and len(prov) == 1
+        and isinstance(prov[0], dict)
+        and prov[0].get("where") == "palette.alias"
+    )
 
 
 def _derive_skeleton_attrs(profile: dict, comp: dict) -> None:

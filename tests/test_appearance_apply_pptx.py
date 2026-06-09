@@ -191,6 +191,53 @@ class PptxAppearanceApplyTest(unittest.TestCase):
                 [f.check for f in sink if f.check == "appearance_color_skipped"], []
             )
 
+    def test_minted_palette_alias_resolves_as_run_color(self) -> None:
+        """Cluster E1 cross-format leg: an off-theme ``hex:RRGGBB`` accent the model
+        NAMED an ALIAS for (minted into theme.palette via the real merge path, ref
+        byte-copied) is addressable as a clean dotted run-color token on pptx and
+        applies as the captured RGB (zero resolver change - the alias is just another
+        palette key)."""
+        from brandkit.profile import comprehension as comp_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            tp = Path(td)
+            template = tp / "branded.pptx"
+            T._branded_template(template)
+            profile = _profile_with_body(
+                template,
+                palette={
+                    "hex:0B5394": {
+                        "ref": {"kind": "hex", "hex": "0B5394"},
+                        "provenance": [{"where": "run.color", "detail": "body"}],
+                        "frequency": "accent",
+                    }
+                },
+            )
+            # The model NAMES an alias; the engine mints the dotted token byte-copied.
+            res = comp_mod.merge(
+                profile,
+                {"palette_annotations": {"hex:0B5394": {"alias": "accent.brandblue"}}},
+            )
+            self.assertTrue(res.ok, res.problems)
+            idoc = {
+                "blocks": [
+                    {"type": "heading", "level": 1, "text": "S"},
+                    {
+                        "type": "paragraph",
+                        "runs": [{"t": "Aliased", "color": "accent.brandblue"}],
+                    },
+                ]
+            }
+            out = tp / "out.pptx"
+            sink: list = []
+            pg.generate(profile, template, parse_idoc(idoc), out, findings=sink)
+            target = next(
+                r for r in _body_runs(Presentation(out)) if r.text == "Aliased"
+            )
+            self.assertEqual(target.font.color.type, MSO_COLOR_TYPE.RGB)
+            self.assertEqual(str(target.font.color.rgb), "0B5394")
+            self.assertEqual([f.check for f in sink if "color" in f.check], [])
+
     def test_explicit_run_token_wins_over_body_default(self) -> None:
         """A per-run color token is applied first and the body-default color, gated on
         set-only-when-unset, does NOT clobber it."""

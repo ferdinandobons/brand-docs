@@ -1979,6 +1979,80 @@ def check_color_token_targets(profile: dict) -> list[Finding]:
     return findings
 
 
+def check_palette_alias_targets(profile: dict) -> list[Finding]:
+    """FAIL-CLOSED integrity of every model-NAMED palette ALIAS token (Cluster E1).
+
+    The sibling of :func:`check_color_token_targets` for the alias bridge: a model
+    NAMES an alias for a captured palette entry and the engine mints a dotted token
+    whose ``ref`` is a BYTE-COPY of that entry's ``ref`` (an off-theme ``hex:RRGGBB``
+    accent becomes addressable as a clean run-color token). The engine - never the
+    model - authors the color, so the alias is valid ONLY when:
+
+      1. the alias token is syntactically legal (a dotted role-id);
+      2. the source ``palette_annotations`` key is a real ``theme.palette`` entry
+         (already gated by ``check_color_token_targets`` / ``check_membership``);
+      3. the minted alias token actually exists in ``theme.palette``;
+      4. the minted ref is BYTE-IDENTICAL (``==`` dict equality) to the source
+         entry's captured ref - an alias that invented a hex or diverged is an ERROR.
+
+    A collision is impossible by construction (the mint refuses to shadow a non-alias
+    key and ``check_membership`` rejects a colliding alias before the mint), but a
+    minted token whose ref is not a byte-copy of its declared source is the paranoid
+    ENGINE-error this check catches fail-closed.
+
+    Model-free and deterministic. No-ops when the comprehension is absent (status !=
+    present) and on annotations carrying no ``alias``, so the model-free CI path, a
+    pre-palette profile, and the no-alias byte-identity path all stay green.
+    """
+    comp = _present_comprehension(profile)
+    if comp is None:
+        return []
+    palette = (profile.get("theme") or {}).get("palette") or {}
+    if not isinstance(palette, dict):
+        return []
+    findings: list[Finding] = []
+    for key, ann in (comp.get("palette_annotations") or {}).items():
+        if not isinstance(ann, dict):
+            continue
+        alias = ann.get("alias")
+        if not alias:
+            continue
+        if not isinstance(alias, str) or not schema.is_valid_role_id(alias):
+            findings.append(
+                Finding(
+                    "palette_alias_targets_exist",
+                    schema.Severity.ERROR.value,
+                    f"palette alias token {alias!r} (for source {key!r}) is not a "
+                    "syntactically-legal dotted token",
+                )
+            )
+            continue
+        source = palette.get(key)
+        source_ref = source.get("ref") if isinstance(source, dict) else None
+        minted = palette.get(alias)
+        if not isinstance(minted, dict):
+            findings.append(
+                Finding(
+                    "palette_alias_targets_exist",
+                    schema.Severity.ERROR.value,
+                    f"palette alias token {alias!r} (for source {key!r}) was not "
+                    "minted into theme.palette",
+                )
+            )
+            continue
+        minted_ref = minted.get("ref")
+        if minted_ref != source_ref:
+            findings.append(
+                Finding(
+                    "palette_alias_targets_exist",
+                    schema.Severity.ERROR.value,
+                    f"palette alias token {alias!r} ref {minted_ref!r} is not a "
+                    f"byte-copy of source {key!r} ref {source_ref!r}",
+                )
+            )
+    return findings
+
+
 def _present_comprehension(profile: dict) -> dict | None:
     comp = profile.get("comprehension")
     if (

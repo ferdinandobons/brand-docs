@@ -890,6 +890,309 @@ class PaletteAnnotationsTest(unittest.TestCase):
         self.assertTrue(any("palette_annotations" in p for p in problems), problems)
 
 
+def _hex_palette_entry(hexval):
+    """A captured OFF-THEME accent palette entry (a ``hex:RRGGBB`` id, model null)."""
+    return {
+        "ref": {"kind": "hex", "hex": hexval},
+        "provenance": [{"where": "run.color", "detail": "body"}],
+        "frequency": "accent",
+        "name": None,
+        "purpose": None,
+        "use_when": None,
+    }
+
+
+class PaletteAliasTest(unittest.TestCase):
+    """Cluster E1: the model NAMES an alias for a captured off-theme palette entry and
+    the engine mints a syntactically-legal dotted token whose ref is a BYTE-COPY of the
+    captured ref, so the accent becomes addressable as a clean run-color token WITHOUT
+    the model ever authoring a hex."""
+
+    def _profile_with_hex_palette(self):
+        prof = _docx_profile_with_inventory()
+        prof["theme"]["palette"] = {
+            "accent1": _palette_entry("accent1"),
+            "hex:16213F": _hex_palette_entry("16213F"),
+            "hex:2B7CD3": _hex_palette_entry("2B7CD3"),
+        }
+        return prof
+
+    def test_alias_mints_token_with_byte_copied_ref(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        self.assertTrue(res.ok, res.problems)
+        palette = prof["theme"]["palette"]
+        self.assertIn("accent.brandblue", palette)
+        minted = palette["accent.brandblue"]
+        # The ref is a BYTE-COPY of the captured entry's ref (dict equality)...
+        self.assertEqual(minted["ref"], palette["hex:16213F"]["ref"])
+        self.assertEqual(minted["ref"], {"kind": "hex", "hex": "16213F"})
+        # ...but a deep copy, so mutating the source never leaks into the alias.
+        palette["hex:16213F"]["ref"]["hex"] = "MUTATED"
+        self.assertEqual(minted["ref"]["hex"], "16213F")
+
+    def test_alias_entry_is_a_pure_bridge_no_advisory_fields(self):
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        minted = prof["theme"]["palette"]["accent.brandblue"]
+        self.assertIsNone(minted["name"])
+        self.assertIsNone(minted["purpose"])
+        self.assertIsNone(minted["use_when"])
+        self.assertIsNone(minted["semantic_role"])
+        self.assertEqual(minted["frequency"], "accent")
+        self.assertEqual(
+            minted["provenance"], [{"where": "palette.alias", "detail": "hex:16213F"}]
+        )
+
+    def test_resolve_color_on_alias_returns_the_captured_ref(self):
+        from brandkit.profile.resolver import ProfileResolver
+
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        r = ProfileResolver(prof)
+        self.assertEqual(
+            r.resolve_color("accent.brandblue"), r.resolve_color("hex:16213F")
+        )
+        self.assertEqual(
+            r.resolve_color("accent.brandblue"), {"kind": "hex", "hex": "16213F"}
+        )
+
+    def test_alias_alongside_named_annotation(self):
+        # An entry can BOTH be named (advisory mirrored onto the source) AND aliased.
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof,
+            {
+                "palette_annotations": {
+                    "hex:16213F": {"name": "brand accent", "alias": "accent.brandblue"}
+                }
+            },
+        )
+        palette = prof["theme"]["palette"]
+        # The source entry got the advisory name...
+        self.assertEqual(palette["hex:16213F"]["name"], "brand accent")
+        # ...the alias bridge did NOT (alias is a directive, not advisory).
+        self.assertIsNone(palette["accent.brandblue"]["name"])
+
+    def test_multiple_aliases_in_one_proposal(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof,
+            {
+                "palette_annotations": {
+                    "hex:16213F": {"alias": "accent.brandblue"},
+                    "hex:2B7CD3": {"alias": "accent.secondary"},
+                }
+            },
+        )
+        self.assertTrue(res.ok, res.problems)
+        palette = prof["theme"]["palette"]
+        self.assertEqual(
+            palette["accent.brandblue"]["ref"], {"kind": "hex", "hex": "16213F"}
+        )
+        self.assertEqual(
+            palette["accent.secondary"]["ref"], {"kind": "hex", "hex": "2B7CD3"}
+        )
+
+    def test_alias_to_theme_slot_entry(self):
+        # An alias may also name a theme-slot capture (ref is a theme kind).
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof, {"palette_annotations": {"accent1": {"alias": "accent.primary"}}}
+        )
+        minted = prof["theme"]["palette"]["accent.primary"]
+        self.assertEqual(minted["ref"], {"kind": "theme", "theme": "accent1"})
+
+    def test_alias_to_noncaptured_entry_is_rejected(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:DEADBE": {"alias": "accent.ghost"}}}
+        )
+        self.assertFalse(res.ok)
+        self.assertEqual(prof["comprehension"]["status"], "rejected")
+        self.assertTrue(
+            any("hex:DEADBE" in p and "palette" in p for p in res.problems),
+            res.problems,
+        )
+        self.assertNotIn("accent.ghost", prof["theme"]["palette"])
+
+    def test_illegal_alias_token_is_rejected(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "@#$%"}}}
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(
+            any("alias" in p and "dotted" in p for p in res.problems), res.problems
+        )
+        self.assertNotIn("@#$%", prof["theme"]["palette"])
+
+    def test_alias_colliding_with_palette_key_is_rejected(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent1"}}}
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(
+            any("collides" in p and "theme.palette" in p for p in res.problems),
+            res.problems,
+        )
+        # The original captured slot ref is NOT shadowed.
+        self.assertEqual(
+            prof["theme"]["palette"]["accent1"]["ref"],
+            {"kind": "theme", "theme": "accent1"},
+        )
+
+    def test_alias_colliding_with_role_id_is_rejected(self):
+        prof = self._profile_with_hex_palette()  # roles carry 'caption', 'cover.title'
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "caption"}}}
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(
+            any("collides" in p and "role id" in p for p in res.problems), res.problems
+        )
+
+    def test_duplicate_alias_token_is_rejected(self):
+        prof = self._profile_with_hex_palette()
+        res = comp_mod.merge(
+            prof,
+            {
+                "palette_annotations": {
+                    "hex:16213F": {"alias": "accent.dup"},
+                    "hex:2B7CD3": {"alias": "accent.dup"},
+                }
+            },
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(any("more than once" in p for p in res.problems), res.problems)
+
+    def test_alias_into_empty_palette_is_rejected(self):
+        prof = _docx_profile_with_inventory()  # no theme.palette -> empty inventory
+        res = comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        self.assertFalse(res.ok)
+        self.assertTrue(
+            any("hex:16213F" in p and "palette" in p for p in res.problems),
+            res.problems,
+        )
+
+    def test_alias_merge_is_idempotent(self):
+        prof_a = self._profile_with_hex_palette()
+        prof_b = self._profile_with_hex_palette()
+        comp = {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        comp_mod.merge(prof_a, dict(comp))
+        comp_mod.merge(prof_b, dict(comp))
+        self.assertEqual(
+            json.dumps(prof_a["theme"]["palette"], sort_keys=True),
+            json.dumps(prof_b["theme"]["palette"], sort_keys=True),
+        )
+        self.assertEqual(
+            json.dumps(prof_a["comprehension"], sort_keys=True),
+            json.dumps(prof_b["comprehension"], sort_keys=True),
+        )
+        # Re-merging the SAME proposal onto an already-aliased profile is stable.
+        snapshot = json.dumps(prof_a["theme"]["palette"], sort_keys=True)
+        comp_mod.merge(prof_a, dict(comp))
+        self.assertEqual(
+            json.dumps(prof_a["theme"]["palette"], sort_keys=True), snapshot
+        )
+
+    def test_no_alias_proposal_mints_no_new_palette_key(self):
+        prof = self._profile_with_hex_palette()
+        before = set(prof["theme"]["palette"])
+        comp_mod.merge(prof, {"palette_annotations": {"hex:16213F": {"name": "blue"}}})
+        self.assertEqual(set(prof["theme"]["palette"]), before)
+
+    def test_alias_invariant_declared(self):
+        self.assertIn("palette_alias_targets_exist", schema.DEFAULT_L0_INVARIANTS)
+
+    def test_l0_check_passes_on_valid_alias(self):
+        from brandkit.qa import checks_deterministic as cd
+
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        self.assertEqual(cd.check_palette_alias_targets(prof), [])
+
+    def test_l0_check_rejects_manually_diverged_alias_ref(self):
+        # The paranoid ENGINE-error arm: a minted alias whose ref is NOT a byte-copy of
+        # its declared source ref is an ERROR (the model never authors a color).
+        from brandkit.qa import checks_deterministic as cd
+
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(
+            prof, {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}}
+        )
+        # Tamper post-merge: invent a hex on the alias.
+        prof["theme"]["palette"]["accent.brandblue"]["ref"] = {
+            "kind": "hex",
+            "hex": "INVENTED",
+        }
+        findings = cd.check_palette_alias_targets(prof)
+        self.assertTrue(
+            any(f.check == "palette_alias_targets_exist" for f in findings), findings
+        )
+
+    def test_l0_check_noops_without_comprehension(self):
+        from brandkit.qa import checks_deterministic as cd
+
+        prof = self._profile_with_hex_palette()  # no comprehension block
+        self.assertEqual(cd.check_palette_alias_targets(prof), [])
+
+    def test_schema_accepts_string_alias_rejects_nonstring(self):
+        # SHAPE-ONLY: alias is an optional string (the dotted-syntax / collision rules
+        # are the fail-closed merge/QA checks, not this structural validator).
+        self.assertEqual(
+            schema._validate_palette_annotations(
+                {"hex:16213F": {"alias": "accent.brandblue"}}
+            ),
+            [],
+        )
+        problems = schema._validate_palette_annotations({"hex:16213F": {"alias": 123}})
+        self.assertTrue(any("alias" in p for p in problems), problems)
+
+    def test_l0_check_rejects_illegal_alias_token(self):
+        # A manually-corrupted profile whose alias token is illegal syntax is an ERROR.
+        from brandkit.qa import checks_deterministic as cd
+
+        prof = self._profile_with_hex_palette()
+        prof["comprehension"] = {
+            "status": "present",
+            "palette_annotations": {"hex:16213F": {"alias": "Bad Token"}},
+        }
+        findings = cd.check_palette_alias_targets(prof)
+        self.assertTrue(
+            any(f.check == "palette_alias_targets_exist" for f in findings), findings
+        )
+
+    def test_alias_overlay_refinement_carries_alias(self):
+        prof = self._profile_with_hex_palette()
+        comp_mod.merge(prof, {"palette_annotations": {"hex:2B7CD3": {"name": "sec"}}})
+        existing = prof["comprehension"]
+        out = comp_mod.overlay_refinement(
+            existing,
+            {"palette_annotations": {"hex:16213F": {"alias": "accent.brandblue"}}},
+        )
+        # The overlay carries BOTH the new aliased entry and the pre-existing one.
+        self.assertEqual(
+            out["palette_annotations"]["hex:16213F"]["alias"], "accent.brandblue"
+        )
+        self.assertIn("hex:2B7CD3", out["palette_annotations"])
+        # Merging the overlay mints the alias (same success as the direct merge).
+        res = comp_mod.merge(prof, out)
+        self.assertTrue(res.ok, res.problems)
+        self.assertIn("accent.brandblue", prof["theme"]["palette"])
+
+
 class OverlayRefinementTest(unittest.TestCase):
     """C3: the pure overlay primitive (delta over the EXISTING sinks, closed-key)."""
 

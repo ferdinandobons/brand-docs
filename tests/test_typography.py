@@ -1657,6 +1657,37 @@ class ApplyRunColorTokenTest(unittest.TestCase):
             self.assertTrue(colored)
             self.assertEqual(str(colored[0].font.color.rgb), "1F4E79")
 
+    def test_minted_palette_alias_resolves_and_applies(self):
+        # Cluster E1 cross-format leg (docx): an off-theme hex:RRGGBB accent the model
+        # NAMED an ALIAS for (minted via the real merge path, ref byte-copied) is
+        # addressable as a clean dotted run-color token on docx and applies as the
+        # captured RGB (zero resolver change - the alias is just another palette key).
+        from brandkit.profile import comprehension as comp_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            shell = _shell(Path(td))
+            out = Path(td) / "out.docx"
+            prof = _palette_profile({"hex:1F4E79": _palette_entry("hex", "1F4E79")})
+            res = comp_mod.merge(
+                prof,
+                {"palette_annotations": {"hex:1F4E79": {"alias": "accent.brandblue"}}},
+            )
+            self.assertTrue(res.ok, res.problems)
+            self.assertIn("accent.brandblue", prof["theme"]["palette"])
+            idoc = ir.IntermediateDocument(
+                blocks=[
+                    ir.Paragraph(runs=[{"t": "aliased", "color": "accent.brandblue"}])
+                ]
+            )
+            docx_generate.generate(prof, shell, idoc, out)
+            colored = [
+                r
+                for r in self._para_runs(out)
+                if r.text and r.font.color.type == MSO_COLOR_TYPE.RGB
+            ]
+            self.assertTrue(colored)
+            self.assertEqual(str(colored[0].font.color.rgb), "1F4E79")
+
     def test_unknown_token_leaves_inherited_with_info_finding(self):
         with tempfile.TemporaryDirectory() as td:
             shell = _shell(Path(td))

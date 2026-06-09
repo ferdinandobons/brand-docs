@@ -104,6 +104,12 @@ whether the file is a Word document, a PowerPoint deck, or an Excel workbook.
    palette id. You **name** a color; you never author one - the deterministic
    capture owns the actual `ref`/hex, and a key into an empty/absent `palette`
    inventory is fail-closed. Annotate nothing when the template carried no color.
+   An optional `alias` field on an annotation names a dotted-token alias for the
+   captured color entry, minted at merge time with the captured `ref` byte-copied -
+   so an off-theme `hex:RRGGBB` accent becomes addressable as a clean run-color
+   token. The alias must be a syntactically-legal dotted token (the same lowercase
+   `family.qualifier` grammar as a role id) that does not collide with an existing
+   palette key or role id; you name it, the engine copies the captured `ref`.
 
 ## The anti-overfitting directive (state and obey verbatim)
 
@@ -175,7 +181,8 @@ each `<...>` with a verbatim id from your own bundle.
   "palette_annotations": {
     "<color-1>": { "name": "primary brand color", "semantic_role": "accent",
                    "purpose": "headings and key emphasis",
-                   "use_when": "drawing attention to a section title" }
+                   "use_when": "drawing attention to a section title",
+                   "alias": "accent.primary" }
   }
 }
 ```
@@ -185,7 +192,11 @@ inventory (a theme slot like `accent1`, or `hex:RRGGBB`). The `name` / `purpose`
 `use_when` / `semantic_role` are advisory free text you write for a human; you
 **never** author a color value - the deterministic capture owns the actual
 `ref`/hex, and the merge mirrors your names onto `theme.palette` without ever
-touching the captured color.
+touching the captured color. The optional `alias` (here `accent.primary`) is a
+dotted-token alias for the captured color entry, minted at merge time with the
+captured `ref` byte-copied for reachability as a run-color token; it must be a
+syntactically-legal dotted token that collides with no existing palette key or role
+id, and again you only name it - the engine copies the captured `ref`.
 
 ## Format readiness
 

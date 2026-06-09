@@ -360,6 +360,18 @@ DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     # No-ops on a profile with no (or an ``absent``) overrides block, so it is safe
     # for the model-free CI path and for all three formats.
     "override_targets_exist",
+    # Fail-closed integrity of every PALETTE ALIAS token (Cluster E1): a model NAMES
+    # an alias for a captured palette entry and the engine mints a dotted token whose
+    # ref is a BYTE-COPY of that entry's ref. The check rejects an alias whose token is
+    # syntactically illegal (not a dotted role-id), collides with an existing
+    # theme.palette key, or whose minted ref is not byte-identical to its declared
+    # source entry's ref (the engine never authors a color). Wired into ``run_qa`` next
+    # to ``check_color_token_targets`` in the SAME change that added the alias mint (the
+    # invariant list is documentation; ``run_qa`` / ``check_palette_alias_targets`` is
+    # the enforcement). No-ops on a profile with no (or an absent) comprehension block
+    # and on one with no alias proposals, so the model-free CI path, pptx/xlsx, and the
+    # frozen no-alias byte-identity all stay green.
+    "palette_alias_targets_exist",
     # The destructive-action floor (§6): reconciliation must never remove a
     # preserved cover anchor / index block the deterministic layer did not also
     # classify as placeholder/demo. Enforced at generate time by the generators
@@ -940,9 +952,13 @@ def _validate_structure(structure: Any) -> list[str]:
 # palette provenance fact records WHICH observed source named the color; nothing
 # outside this set may appear. The frozen mirror of
 # ``docx.typography.PALETTE_WHERE`` (kept here so the validator has no format
-# import). ``palette_role`` is the only NON-authoritative source.
+# import). ``palette_role`` is the only NON-authoritative source. ``palette.alias``
+# is the ENGINE-minted source for an alias token (Cluster E1): the model NAMES an
+# alias for a captured entry, the engine mints a dotted token whose ref is a
+# byte-copy of that entry's ref, stamping this provenance ``where`` with the source
+# palette key as ``detail`` (so an alias is never confused for an observed capture).
 PALETTE_WHERE: frozenset[str] = frozenset(
-    {"palette_role", "role.appearance", "run.color", "link.color"}
+    {"palette_role", "role.appearance", "run.color", "link.color", "palette.alias"}
 )
 # The COARSE frequency buckets a palette entry may carry (never raw counts).
 PALETTE_FREQUENCIES: frozenset[str] = frozenset({"dominant", "accent", "rare"})
@@ -1427,11 +1443,21 @@ def _validate_palette_annotations(annotations: Any) -> list[str]:
     """Validate ``comprehension.palette_annotations`` (absent is fine).
 
     SHAPE-ONLY: a map ``{ <palette_key>: { name?, purpose?, use_when?,
-    semantic_role? } }`` whose every value is an object of advisory strings (or
-    null). The KEY is a template-derived palette id (``accent1`` / ``hex:RRGGBB``)
+    semantic_role?, alias? } }`` whose every value is an object of advisory strings
+    (or null). The KEY is a template-derived palette id (``accent1`` / ``hex:RRGGBB``)
     and is NOT syntax-checked here (a ``hex:...`` key is legal and would fail a
     role-id regex); its MEMBERSHIP against the surfaced palette inventory is the
     fail-closed QA check. NEVER required.
+
+    The optional ``alias`` (Cluster E1) is a DIRECTIVE the model writes to mint a
+    syntactically-legal dotted token aliasing this captured entry (an off-theme
+    ``hex:RRGGBB`` accent becomes addressable as a clean run-color token). It is a
+    string here (shape only); its DOTTED SYNTAX and non-collision are validated
+    fail-closed at merge time (``check_membership``) and QA time
+    (``check_palette_alias_targets``), and the engine - never the model - copies the
+    captured ``ref`` byte-identical into the minted token. It is NOT in
+    :data:`PALETTE_ANNOTATION_FIELDS`, so it is never mirrored back onto the source
+    entry as advisory text.
     """
     if annotations is None:
         return []
@@ -1447,7 +1473,7 @@ def _validate_palette_annotations(annotations: Any) -> list[str]:
         if not isinstance(ann, dict):
             problems.append(f"{path}: must be an object")
             continue
-        for field in PALETTE_ANNOTATION_FIELDS:
+        for field in (*PALETTE_ANNOTATION_FIELDS, "alias"):
             val = ann.get(field)
             if val is not None and not isinstance(val, str):
                 problems.append(
