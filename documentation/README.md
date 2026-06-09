@@ -15,6 +15,8 @@ Long-form documentation for [BrandDocs](../README.md). The top-level
 | [SKILLS.md](SKILLS.md) | The three skills (`brand-docx` / `brand-pptx` / `brand-xlsx`) and the project status table. |
 | [PLUGIN_WORKFLOW.md](PLUGIN_WORKFLOW.md) | The full end-to-end agent workflow: skill selection, preflight, extract/comprehend/generate/QA, visual manifests, repair rounds. |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Local dev setup, test suites, and contribution conventions. |
-| [FAQ.md](FAQ.md) | Frequently asked questions and discovery keywords. |
-| [ROADMAP.md](ROADMAP.md) | Planned, designed-but-not-yet-built features (typography capture, profile learning from QA findings) and salvaged visual-audit ideas. |
-| [DIRECTORY_SUBMISSIONS.md](DIRECTORY_SUBMISSIONS.md) | Reusable copy, categories and tags for listing BrandDocs in directories. |
+| [ROADMAP.md](ROADMAP.md) | Planned, designed-but-not-yet-built features and the next-wave cluster status. |
+
+The FAQ lives in [ARCHITECTURE.md](ARCHITECTURE.md#faq). The strategic
+self-assessment and the hardening plan live in the top-level
+[REFLECTIONS.md](../REFLECTIONS.md).
