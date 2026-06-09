@@ -123,6 +123,13 @@ def run_qa(
     # are absent (status != present), so the model-free CI path and pre-B3 profiles
     # are unaffected.
     findings = findings + checks_deterministic.check_override_targets(shell, profile)
+    # Audit visibility (Cluster B4): surface every LIVE learned override as an INFO
+    # ``override_applied`` finding so a learned re-point is never silent and verify
+    # re-surfaces it. Gated on the SAME presence+freeze predicate the resolver consumes
+    # on (``store.overrides_are_present``), so it emits iff an override branch is
+    # actually live; INFO-only, not in ``DEFAULT_L0_INVARIANTS``, so it can never flip a
+    # verdict. Reads only the profile, so it runs in both generate and verify.
+    findings = findings + checks_deterministic.check_overrides_applied(profile)
     # Fail-closed COLOR-token membership (sibling of comprehension targets): every
     # palette color token the comprehension/IDoc references must be a verbatim key
     # of theme.palette. No-ops when comprehension is absent, so the model-free CI

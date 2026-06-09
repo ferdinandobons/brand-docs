@@ -148,6 +148,28 @@ def main(argv: list[str] | None = None) -> int:
         help="promote the distilled lesson to a LIVE override the resolver consumes",
     )
 
+    # propose-overrides: the MODEL-assisted sibling of ``learn`` (B4). The model reads
+    # the comprehend-input bundle's ``generation_history`` (the AMBIGUOUS recurring
+    # remainder deterministic ``learn`` could not bind) and authors an overrides
+    # proposal; this OVERLAYS it onto any existing lesson (overlay_overrides) and routes
+    # the WHOLE block through the SINGLE merge_overrides sink (shape + fail-closed
+    # membership + acyclicity). ADVISORY by default like ``learn``: written but kept OUT
+    # of the live resolver (status forced 'absent', byte-identical) until --accept
+    # promotes it to 'present'. No schema change (1.2.0).
+    p = sub.add_parser("propose-overrides")
+    p.add_argument("--name", required=True)
+    p.add_argument(
+        "--input",
+        required=True,
+        help="path to the model-authored overrides proposal JSON",
+    )
+    p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
+    p.add_argument(
+        "--accept",
+        action="store_true",
+        help="promote the proposed correction to a LIVE override the resolver consumes",
+    )
+
     p = sub.add_parser("list")
     p.add_argument("--scope", default="auto", choices=("auto", "project", "global"))
 
@@ -327,7 +349,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
     if args.cmd == "comprehend-input":
         loaded = store.load_profile(args.name, args.scope)
-        bundle = comprehension_mod.comprehend_input_bundle(loaded.profile)
+        # B4: surface the SAME-shell generation_report.json history (the AMBIGUOUS
+        # recurring-finding remainder) in the bundle so the model can propose overrides
+        # corrections via ``propose-overrides``. Reuses the ``learn`` discovery (a pure
+        # side artifact: degrades to no history on any error). An empty history adds NO
+        # bundle key, so the no-history bundle stays byte-identical to pre-B4.
+        prior_reports = _discover_learn_reports(loaded.profile, loaded.shell_path)
+        bundle = comprehension_mod.comprehend_input_bundle(
+            loaded.profile, prior_reports=prior_reports
+        )
         print(json.dumps(bundle, indent=2, ensure_ascii=False, sort_keys=True))
         return 0
     if args.cmd == "comprehend":
@@ -454,6 +484,63 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"learned {args.name}: {result.distilled} override(s) distilled [{state}]"
+        )
+        return 0
+    if args.cmd == "propose-overrides":
+        import copy
+
+        from brandkit.profile import overrides as overrides_mod
+
+        loaded = store.load_profile(args.name, args.scope)
+        try:
+            delta = json.loads(Path(args.input).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"ERROR propose-overrides: cannot read {args.input}: {exc}")
+            return 1
+        # The provenance stamp travels with the delta verbatim (same as comprehend); it
+        # is never one of the overlaid override containers.
+        generated_by = (
+            delta.pop("generated_by", None) if isinstance(delta, dict) else None
+        )
+        # OVERLAY TRAP: merge_overrides is REPLACE-from-single-source, so a raw delta
+        # would WIPE a deterministic ``learn`` lesson. Overlay onto the EXISTING block
+        # first, then route the WHOLE combined proposal through the single sink so the
+        # full fail-closed validation (shape + membership + acyclicity) re-runs and
+        # every pointer - old or new - re-binds to the live surface inventories.
+        existing = copy.deepcopy(
+            (loaded.profile.get("rules") or {}).get("overrides") or {}
+        )
+        combined = overrides_mod.overlay_overrides(
+            existing, delta if isinstance(delta, dict) else {}
+        )
+        result = overrides_mod.merge_overrides(
+            loaded.profile, combined, generated_by=generated_by
+        )
+        # ADVISORY accept gate (mirrors learn --accept): the proposal is written via the
+        # single sink, but it stays OUT of the live resolver (status forced 'absent', so
+        # resolve_role takes zero new branches and bytes stay byte-identical) until
+        # --accept promotes it to 'present'. A single noisy proposal therefore cannot
+        # mint a permanent LIVE correction; the operator must opt in.
+        block = (loaded.profile.get("rules") or {}).get("overrides") or {}
+        if result.ok and not args.accept:
+            block["status"] = schema.ComprehensionStatus.ABSENT.value
+        store.write_profile_json(loaded.directory, loaded.profile)
+        if not result.ok:
+            print(f"propose-overrides REJECTED ({len(result.problems)} problem(s)):")
+            for problem in result.problems:
+                print(f"  {problem}")
+            return 1
+        n_reroute = len(block.get("reroute_roles") or {})
+        n_swap = len(block.get("number_format_swaps") or {})
+        n_demo = len(block.get("demo_clears") or [])
+        state = (
+            "present (LIVE)"
+            if args.accept
+            else "absent (advisory; --accept to go live)"
+        )
+        print(
+            f"proposed-overrides {args.name}: {n_reroute} reroute(s), {n_swap} swap(s), "
+            f"{n_demo} demo-clear(s) [{state}]"
         )
         return 0
     if args.cmd == "list":

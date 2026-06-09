@@ -319,3 +319,51 @@ ingests the resulting structured JSON delta of verbatim ids - it never sees the
 image. The feedback ask happens **only after** the file and its QA summary are
 returned, never before or during generation, and a refinement improves **FUTURE**
 generations - it never re-emits or edits the file you just produced.
+
+## Proposing overrides corrections from recurring findings (the `propose-overrides` verb)
+
+`refine` sharpens the qualitative *understanding*; `propose-overrides` is its peer
+for **shell-bound corrections** - the model-assisted sibling of the deterministic
+`learn` verb. When the same QA finding keeps recurring across runs, the engine's
+deterministic `learn` distils the ones it can bind to a brand-safe target on its own
+(a stub role with a healthy same-family sibling, a captured demo string). The
+**ambiguous remainder** - a stub role with no sibling, a finding whose right re-point
+needs judgement - is surfaced to you in the `comprehend-input` bundle under
+`facts.generation_history`: a bounded, **message-free** list of
+`{check, location, severity, recurred_runs}` (the universal `(check, location)`
+identity only, never the finding's message text). You reason over it and author a
+small overrides proposal, then merge it:
+
+```bash
+# Overlay the proposal onto any existing lesson, then re-validate the whole block.
+python scripts/brandkit/cli.py propose-overrides --name <brand> --input overrides.json
+# Add --accept to make the correction LIVE (else it is written advisory-'absent').
+python scripts/brandkit/cli.py propose-overrides --name <brand> --input overrides.json --accept
+```
+
+A proposal may ONLY **NAME a shell-backed pointer** - never author a style, font, or
+color:
+
+```jsonc
+// reroute a role whose resolver is a dead stub to an EXISTING healthy role:
+"reroute_roles": { "heading.9": "heading.1" },
+// swap a number_format MASK the shell already uses (xlsx):
+"number_format_swaps": { "<role-1>": "#,##0" },
+// register a CAPTURED demo string for clearing:
+"demo_clears": ["<captured-demo-value>"]
+```
+
+The verb **overlays** the proposal onto any present lesson (additive: a deterministic
+`learn` lesson and your proposal coexist, your entry winning a key collision) and
+routes the WHOLE combined block through the single `merge_overrides` writer: the
+target role must be a **declared, shell-backed** role, the mask must be one the shell
+uses, and the demo value must have been captured - any unbound pointer rejects the
+WHOLE proposal (all-or-nothing), so an off-brand correction is impossible by
+construction. Without `--accept` the correction is written but kept OUT of the live
+resolver (`status='absent'`, byte-identical generation); `--accept` makes it LIVE and
+re-stamps `source_shell_sha256`, so a re-extract (new shell) invalidates it.
+
+Like the feedback ask, this happens **only after** generation and improves **FUTURE**
+generations only. Every LIVE correction is auditable: the gate emits an INFO
+`override_applied` finding for each one (in `generate` and `verify` alike), so a
+learned re-point is never silent.

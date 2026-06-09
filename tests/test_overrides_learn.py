@@ -21,6 +21,7 @@ These exercise the model-free learn writer and its canonical sink:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -40,6 +41,7 @@ from brandkit.profile import overrides as ov
 from brandkit.profile import schema, store
 from brandkit.qa import checks_deterministic as cd
 from brandkit.qa import report as vreport
+from brandkit.qa.gate import run_qa
 from brandkit.qa.model import QAReport
 
 
@@ -667,6 +669,278 @@ class LearnCliAcceptGateTest(unittest.TestCase):
                 self.assertFalse(store.overrides_are_present(loaded.profile))
             finally:
                 os.chdir(old_cwd)
+
+
+class OverlayOverridesTest(unittest.TestCase):
+    """B4: ``overlay_overrides`` makes a model proposal ADDITIVE to a deterministic
+    lesson, routed WHOLE through the single ``merge_overrides`` sink (delta wins on a
+    key collision; freeze stamps are NOT carried over)."""
+
+    def test_additive_merge_keeps_existing_and_delta(self):
+        prof = _with_stub_heading(_docx_profile(), "heading.9")
+        # Existing deterministic-style lesson: heading.9 -> heading.1 (LIVE).
+        self.assertTrue(
+            ov.merge_overrides(prof, {"reroute_roles": {"heading.9": "heading.1"}}).ok
+        )
+        existing = copy.deepcopy(prof["rules"]["overrides"])
+        combined = ov.overlay_overrides(
+            existing, {"reroute_roles": {"heading.8": "heading.1"}}
+        )
+        self.assertTrue(ov.merge_overrides(prof, combined).ok)
+        self.assertEqual(
+            prof["rules"]["overrides"]["reroute_roles"],
+            {"heading.8": "heading.1", "heading.9": "heading.1"},
+        )
+        self.assertTrue(store.overrides_are_present(prof))
+
+    def test_delta_wins_on_collision(self):
+        out = ov.overlay_overrides(
+            {"reroute_roles": {"heading.9": "heading.1"}},
+            {"reroute_roles": {"heading.9": "heading.2"}},
+        )
+        self.assertEqual(out["reroute_roles"], {"heading.9": "heading.2"})
+
+    def test_demo_clears_union_provenance_and_scalars(self):
+        out = ov.overlay_overrides(
+            {
+                "demo_clears": ["Lorem"],
+                "provenance": {"a": {"x": 1}},
+                "confidence": 0.5,
+                "generated_by": {"model": "old"},
+            },
+            {"demo_clears": ["Lorem", "Ipsum"], "provenance": {"b": {"y": 2}}},
+        )
+        self.assertEqual(out["demo_clears"], ["Ipsum", "Lorem"])  # union, sorted
+        self.assertEqual(out["provenance"], {"a": {"x": 1}, "b": {"y": 2}})
+        self.assertEqual(out["confidence"], 0.5)  # delta omitted -> existing kept
+        self.assertEqual(out["generated_by"], {"model": "old"})
+
+    def test_status_and_sha_not_carried_over(self):
+        out = ov.overlay_overrides(
+            {"status": "present", "source_shell_sha256": "STALE"}, {}
+        )
+        self.assertNotIn("status", out)
+        self.assertNotIn("source_shell_sha256", out)
+
+    def test_defensive_empty(self):
+        empty = {
+            "reroute_roles": {},
+            "number_format_swaps": {},
+            "demo_clears": [],
+            "provenance": {},
+        }
+        self.assertEqual(ov.overlay_overrides({}, {}), empty)
+        self.assertEqual(ov.overlay_overrides(None, None), empty)
+
+    def test_idempotent_through_merge(self):
+        prof1 = _with_stub_heading(_docx_profile(), "heading.9")
+        prof2 = _with_stub_heading(_docx_profile(), "heading.9")
+        combined = ov.overlay_overrides(
+            {}, {"reroute_roles": {"heading.9": "heading.1"}}
+        )
+        ov.merge_overrides(prof1, dict(combined))
+        ov.merge_overrides(prof2, dict(combined))
+        self.assertEqual(
+            json.dumps(prof1["rules"]["overrides"], sort_keys=True),
+            json.dumps(prof2["rules"]["overrides"], sort_keys=True),
+        )
+
+
+class CheckOverridesAppliedTest(unittest.TestCase):
+    """B4: ``check_overrides_applied`` surfaces every LIVE override as an INFO
+    ``override_applied`` finding (audit trail), gated on the SAME presence+freeze
+    predicate the resolver consumes on, with MESSAGE-FREE locations; silent when the
+    lesson is absent/advisory/drifted; never flips a verdict."""
+
+    def _live(self, prof: dict, **block) -> dict:
+        b = schema.empty_overrides()
+        b["status"] = schema.ComprehensionStatus.PRESENT.value
+        b["source_shell_sha256"] = prof["provenance"]["shell"]["sha256"]
+        b.update(block)
+        prof.setdefault("rules", {})["overrides"] = b
+        return prof
+
+    def test_present_emits_info_per_entry_with_locations(self):
+        prof = self._live(
+            _docx_profile(),
+            reroute_roles={"heading.9": "heading.1"},
+            number_format_swaps={"metric.value": "#,##0"},
+            demo_clears=["Confidential brand text"],
+        )
+        self.assertTrue(store.overrides_are_present(prof))
+        findings = cd.check_overrides_applied(prof)
+        self.assertEqual({f.check for f in findings}, {"override_applied"})
+        self.assertTrue(all(f.severity == "INFO" for f in findings))
+        self.assertEqual(
+            {f.location for f in findings},
+            {"heading.9", "metric.value", "demo_clears[0]"},
+        )
+        demo_f = next(f for f in findings if f.location == "demo_clears[0]")
+        # The demo VALUE (captured brand text) is never inlined into the message.
+        self.assertNotIn("Confidential brand text", demo_f.message)
+
+    def test_absent_returns_empty(self):
+        # The default extractor-stamped block is 'absent' -> nothing applied.
+        self.assertEqual(cd.check_overrides_applied(_docx_profile()), [])
+
+    def test_drifted_shell_returns_empty(self):
+        prof = self._live(_docx_profile(), reroute_roles={"heading.9": "heading.1"})
+        prof["provenance"]["shell"]["sha256"] = "DRIFTED"  # no longer matches the stamp
+        self.assertFalse(store.overrides_are_present(prof))
+        self.assertEqual(cd.check_overrides_applied(prof), [])
+
+    def test_dual_purpose_in_run_qa_never_fails(self):
+        # Reads only the profile, so it runs in the verify path (target=None) too.
+        prof = self._live(_docx_profile(), reroute_roles={"heading.9": "heading.1"})
+        with_lesson = run_qa(None, prof, qa="fast", shell=None)
+        applied = [f for f in with_lesson.findings if f.check == "override_applied"]
+        self.assertTrue(applied)  # the live lesson is auditable at verify time
+        self.assertTrue(all(f.severity == "INFO" for f in applied))
+        # INFO can never flip to FAILED / make the report not-passed (audit trail).
+        self.assertTrue(with_lesson.passed)
+        self.assertNotEqual(with_lesson.verdict, schema.VerificationStatus.FAILED.value)
+
+
+class ProposeOverridesCliTest(unittest.TestCase):
+    """B4: drive ``propose-overrides`` end-to-end. Advisory by default (status
+    'absent', byte-identical resolution); --accept goes LIVE; an unbacked pointer is
+    REJECTED fail-closed; a model proposal is ADDITIVE over a deterministic lesson."""
+
+    def _extract(self) -> None:
+        _synthetic_template(Path("synthetic-template.docx"))
+        self.assertEqual(
+            main(
+                [
+                    "extract",
+                    "--name",
+                    "acme",
+                    "--template",
+                    "synthetic-template.docx",
+                    "--scope",
+                    "project",
+                ]
+            ),
+            0,
+        )
+
+    def _write_proposal(self, obj: dict) -> str:
+        Path("proposal.json").write_text(json.dumps(obj), encoding="utf-8")
+        return "proposal.json"
+
+    def _propose(self, *extra: str) -> int:
+        return main(
+            ["propose-overrides", "--name", "acme", "--scope", "project", *extra]
+        )
+
+    def test_advisory_then_accept(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = Path.cwd()
+            os.chdir(td)
+            try:
+                self._extract()
+                inp = self._write_proposal(
+                    {"reroute_roles": {"heading.9": "heading.1"}}
+                )
+                # Advisory: written but kept OUT of the live resolver (status 'absent').
+                self.assertEqual(self._propose("--input", inp), 0)
+                loaded = store.load_profile("acme", "project")
+                block = loaded.profile["rules"]["overrides"]
+                self.assertEqual(
+                    block["status"], schema.ComprehensionStatus.ABSENT.value
+                )
+                self.assertEqual(block["reroute_roles"], {"heading.9": "heading.1"})
+                self.assertFalse(store.overrides_are_present(loaded.profile))
+
+                # Accept: the SAME proposal goes LIVE.
+                self.assertEqual(self._propose("--input", inp, "--accept"), 0)
+                loaded2 = store.load_profile("acme", "project")
+                self.assertEqual(
+                    loaded2.profile["rules"]["overrides"]["status"],
+                    schema.ComprehensionStatus.PRESENT.value,
+                )
+                self.assertTrue(store.overrides_are_present(loaded2.profile))
+            finally:
+                os.chdir(old)
+
+    def test_unbacked_target_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = Path.cwd()
+            os.chdir(td)
+            try:
+                self._extract()
+                inp = self._write_proposal(
+                    {"reroute_roles": {"heading.9": "heading.does-not-exist"}}
+                )
+                self.assertEqual(self._propose("--input", inp), 1)
+                loaded = store.load_profile("acme", "project")
+                self.assertEqual(
+                    loaded.profile["rules"]["overrides"]["status"],
+                    schema.ComprehensionStatus.REJECTED.value,
+                )
+                self.assertFalse(store.overrides_are_present(loaded.profile))
+            finally:
+                os.chdir(old)
+
+    def test_json_parse_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = Path.cwd()
+            os.chdir(td)
+            try:
+                self._extract()
+                self.assertEqual(self._propose("--input", "does-not-exist.json"), 1)
+            finally:
+                os.chdir(old)
+
+    def test_additive_over_learn_lesson(self):
+        with tempfile.TemporaryDirectory() as td:
+            old = Path.cwd()
+            os.chdir(td)
+            try:
+                self._extract()
+                # Stage a recurring stub-role finding and distil it deterministically.
+                loaded = store.load_profile("acme", "project")
+                shell_sha = vreport.report_shell_sha256(
+                    loaded.profile, loaded.shell_path
+                )
+                for i in range(2):
+                    vdir = Path(f"run{i}.docx.visual")
+                    vdir.mkdir(parents=True, exist_ok=True)
+                    (vdir / vreport.REPORT_FILENAME).write_text(
+                        json.dumps(
+                            {
+                                "schema_version": vreport.REPORT_SCHEMA_VERSION,
+                                "kind": "docx",
+                                "shell_sha256": shell_sha,
+                                "findings": [
+                                    {
+                                        "check": "resolver_targets_exist",
+                                        "severity": "ERROR",
+                                        "message": "brand body text",
+                                        "location": "heading.9",
+                                    }
+                                ],
+                                "generated_at": f"2026-06-0{i + 1}T00:00:00Z",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                self.assertEqual(
+                    main(["learn", "--name", "acme", "--scope", "project", "--accept"]),
+                    0,
+                )
+                # Model proposal ADDS heading.8 -> heading.1 (additive, neither clobbers).
+                inp = self._write_proposal(
+                    {"reroute_roles": {"heading.8": "heading.1"}}
+                )
+                self.assertEqual(self._propose("--input", inp, "--accept"), 0)
+                loaded2 = store.load_profile("acme", "project")
+                self.assertEqual(
+                    loaded2.profile["rules"]["overrides"]["reroute_roles"],
+                    {"heading.8": "heading.1", "heading.9": "heading.1"},
+                )
+                self.assertTrue(store.overrides_are_present(loaded2.profile))
+            finally:
+                os.chdir(old)
 
 
 if __name__ == "__main__":

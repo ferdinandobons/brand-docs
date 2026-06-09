@@ -104,16 +104,21 @@ the home for captured typography. Three additive layers:
 
 ## 2. Profile learns from generation QA findings (a feedback loop)
 
-> **Status: B1-B3 SHIPPED (deterministic core); Phase B (model-proposed, B4) still
-> pending.** Implemented: every `generate` persists `generation_report.json`
+> **Status: B1-B4 SHIPPED (deterministic core + model-proposed phase).**
+> Implemented: every `generate` persists `generation_report.json`
 > (verdict + findings verbatim + shell/content/output sha256) next to the output;
 > cross-run `regression.recurred`/`regression.reintroduced` findings (advisory,
-> keyed on `(check, location)`, same-shell only); and a deterministic `learn` verb
+> keyed on `(check, location)`, same-shell only); a deterministic `learn` verb
 > that distills unambiguous recurring findings into the shell-frozen
 > `rules.overrides` block (closed vocab: reroute_role / number_format /
 > register_demo_clear) through a single all-or-nothing fail-closed sink, consumed
 > by the resolver only as a LAST-RESORT on a stub and re-proven at verify by
-> `check_override_targets`. Lessons stay ADVISORY until `learn --accept`. See
+> `check_override_targets`; and **(B4)** a model-proposed phase - the
+> `comprehend-input` bundle surfaces a message-free `generation_history` slice of the
+> AMBIGUOUS recurring remainder, and a `propose-overrides` verb overlays a
+> model-authored correction onto any existing lesson and routes it through the SAME
+> `merge_overrides` sink, with a gate-wired `override_applied` INFO audit finding for
+> every live correction. Lessons stay ADVISORY until `--accept`. See
 > CONVENTIONS §14. The design below documents the full feature.
 
 ### Problem
@@ -347,10 +352,11 @@ with no new model code.
 
 ### Cluster B - Learn-from-errors (new capability; refines section 2)
 
-> **Status: B1+B2+B3 SHIPPED** (see the section-2 banner; `qa/report.py` +
-> `profile/overrides.py` + the `learn` verb + `check_override_targets`).
-> **B4 (model-proposed corrections) still pending** - it reuses the same
-> `merge_overrides` sink and must land after B3 (it has).
+> **Status: B1+B2+B3+B4 SHIPPED** (see the section-2 banner; `qa/report.py` +
+> `profile/overrides.py` + the `learn` verb + `check_override_targets`, plus the B4
+> `propose-overrides` verb + `overlay_overrides` + the `generation_history` bundle
+> slice + the `override_applied` audit finding). The whole B chain B1 -> B2 -> B3 ->
+> B4 reuses the single `merge_overrides` sink.
 
 When this was written nothing here existed: `generation_report` was absent and
 `rules.overrides` was reserved (`schema.py`) with no reader/writer. Strict chain
@@ -361,7 +367,7 @@ B1 -> B2 -> B3 -> B4.
 | **B1** | Persist `generation_report.json` | serialize the `QAReport` (every `Finding` + shell sha + output/idoc hashes + ts) next to output | `visual_manifest` side-artifact pattern; generate verb | **S** | records check ids + shas, never template words |
 | **B2** | Cross-run regression findings (`regression.recurred`/`reintroduced`) | the recurrence signal the `learn` verb thresholds on | prior `generation_report.json`; `run_qa`; `source_shell_sha256` freeze | **S** | compares `(check, location)` multisets across same-shell runs only |
 | **B3** | Deterministic `learn` verb (Phase A) | distill unambiguous recurring findings into shell-bound `rules.overrides` re-points (reroute role / number_format / register_demo_clear) | `rules.overrides`; `resolve_role` last-resort; new `check_override_targets` mirroring `check_resolver_targets` | M | keys on stable check ids; re-points only to shell-defined artifacts (membership-checked) |
-| **B4** | Model-proposed corrections (Phase B) | model proposes corrections for the ambiguous remainder, routed through `comprehension.merge` into the same `rules.overrides` sink | bounded `generation_history` facts slice; comprehension single writer + `check_membership` | M-L | model only NAMES a shell-backed pointer; merge binds every proposal fail-closed |
+| **B4** *(shipped)* | Model-proposed corrections (Phase B) | model proposes corrections for the ambiguous remainder; `propose-overrides` overlays them onto any existing lesson (`overlay_overrides`) and routes the whole block through the SAME `merge_overrides` sink; a gate-wired `override_applied` INFO finding audits every live correction | bounded message-free `generation_history` bundle slice; single `merge_overrides` writer + `check_membership` | M-L | model only NAMES a shell-backed pointer; merge binds every proposal fail-closed, all-or-nothing |
 
 ### Cluster C - Model-in-the-loop (widen the 2 model touchpoints to 3-4)
 

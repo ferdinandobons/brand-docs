@@ -48,7 +48,22 @@ All notable changes to BrandDocs are documented in this file.
     explicit `learn --accept` - with no accepted lesson, generation is
     byte-identical to today. QA producers now carry the structured `location`
     pointer (role id / demo marker) so lessons distill from real run history.
-    The model-proposed phase (B4) is a later increment.
+- **Model-proposed overrides corrections (the model proposes a fix for the AMBIGUOUS
+  recurring remainder; Cluster B4).** The deterministic `learn` binds only the
+  findings it can resolve on its own; the remainder (a stub role with no healthy
+  sibling, a finding whose right re-point needs judgement) is now surfaced to the
+  model in the `comprehend-input` bundle as a bounded, MESSAGE-FREE
+  `facts.generation_history` slice (`{check, location, severity, recurred_runs}`,
+  keyed on `(check, location)` only - no brand text leaks). A new `propose-overrides`
+  verb takes a model-authored proposal, OVERLAYS it onto any existing lesson
+  (`overlay_overrides`, additive: a deterministic lesson and a model proposal coexist)
+  and routes the WHOLE block through the SAME single `merge_overrides` sink, so every
+  pointer is re-bound fail-closed and the model can only ever NAME a shell-backed
+  re-point (never author a style/font/color). Advisory until `--accept` (mirrors
+  `learn`); byte-identical generation until a correction goes live. Every LIVE
+  override is now auditable: a gate-wired `check_overrides_applied` emits an INFO
+  `override_applied` finding per live entry (in `generate` and `verify`), so a learned
+  re-point is never silent (INFO-only, never flips a verdict). Schema stays 1.2.0.
 - **Model-in-the-loop (the model's judgements persist and re-validate fail-closed).**
   Three additive touchpoints, all routed through the comprehension block (the single
   model-writable, fail-closed, shell-frozen home); model PROPOSES, deterministic

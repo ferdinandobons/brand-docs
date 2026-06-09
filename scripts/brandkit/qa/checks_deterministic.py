@@ -980,6 +980,81 @@ def check_override_targets(shell, profile: dict) -> list[Finding]:
     return findings
 
 
+def check_overrides_applied(profile: dict) -> list[Finding]:
+    """Surface every LIVE learned override as an INFO ``override_applied`` finding.
+
+    The audit peer of :func:`check_override_targets`: where that PROVES a present
+    lesson's targets against the shell (fail-closed ERROR), this makes a present lesson
+    VISIBLE so a learned re-point is never silent and ``verify`` re-surfaces it. It
+    gates on the EXACT presence+freeze predicate the resolver consumes on
+    (:func:`store.overrides_are_present`), so it emits iff the resolver would actually
+    take an override branch: an ``absent`` (advisory, not-yet ``--accept``ed) lesson, a
+    drifted-shell stamp, or a pre-B3 profile emits NOTHING (byte-identical CI path).
+    Reads ONLY the profile, so it runs in BOTH ``generate`` and ``verify`` QA - a live
+    correction is auditable even at verify time when no document is produced.
+
+    Emits one INFO ``override_applied`` per live entry, in deterministic order:
+      - each ``reroute_roles`` ``requested -> target`` (location = the requested role
+        id, a non-brand stable pointer; the message names the re-point);
+      - each ``number_format_swaps`` ``rid -> mask`` (location = the role id; the mask
+        is shell-backed so it is safe to name);
+      - each ``demo_clears`` value (location = ``demo_clears[<i>]`` - NEVER the value,
+        which is captured template/brand text; the message stays value-free).
+
+    INFO severity, NOT in :data:`schema.DEFAULT_L0_INVARIANTS`, never ERROR, so it can
+    never flip a verdict; deliberately NOT in :data:`schema.LEARNABLE_CHECKS` (an audit
+    trail must not feed itself).
+    """
+    # Late import keeps this module free of the store layer at import time (mirrors the
+    # late ``from brandkit.qa import checks_deterministic`` imports elsewhere).
+    from brandkit.profile import store
+
+    if not store.overrides_are_present(profile):
+        return []
+    block = schema.overrides_block(profile)
+    findings: list[Finding] = []
+
+    reroutes = block.get("reroute_roles") or {}
+    if isinstance(reroutes, dict):
+        for requested in sorted(reroutes):
+            findings.append(
+                Finding(
+                    "override_applied",
+                    schema.Severity.INFO.value,
+                    f"live override re-points role {requested!r} -> "
+                    f"{reroutes[requested]!r}",
+                    location=requested,
+                )
+            )
+
+    swaps = block.get("number_format_swaps") or {}
+    if isinstance(swaps, dict):
+        for rid in sorted(swaps):
+            findings.append(
+                Finding(
+                    "override_applied",
+                    schema.Severity.INFO.value,
+                    f"live override swaps number_format of role {rid!r} to "
+                    f"{swaps[rid]!r}",
+                    location=rid,
+                )
+            )
+
+    clears = block.get("demo_clears") or []
+    if isinstance(clears, list):
+        for i in range(len(clears)):
+            findings.append(
+                Finding(
+                    "override_applied",
+                    schema.Severity.INFO.value,
+                    "live override clears a captured demo value",
+                    location=f"demo_clears[{i}]",
+                )
+            )
+
+    return findings
+
+
 def check_color_token_targets(profile: dict) -> list[Finding]:
     """FAIL-CLOSED membership of every COLOR token against ``theme.palette``.
 

@@ -105,13 +105,22 @@ def surface_inventories(profile: dict) -> dict:
     }
 
 
-def comprehend_input_bundle(profile: dict, *, excerpt_chars: int = 8000) -> dict:
+def comprehend_input_bundle(
+    profile: dict, *, excerpt_chars: int = 8000, prior_reports: Optional[list] = None
+) -> dict:
     """Build the bounded ``{facts, excerpt}`` bundle the model reasons over.
 
     ``facts`` is the surfaced inventory plus the most relevant ``surface`` /
     ``artifact_catalog`` slices; ``excerpt`` is an ordered, length-capped sample
     of text the extractor already collected (never raw OOXML). The agent reads
     THIS bundle, never the template.
+
+    When ``prior_reports`` (the SAME-shell ``generation_report.json`` history) carries
+    recurring findings, a MESSAGE-FREE ``facts['generation_history']`` slice is added
+    (Cluster B4): the AMBIGUOUS recurring-finding remainder the deterministic ``learn``
+    step could not bind, which the model reasons over to propose overrides corrections
+    via ``propose-overrides``. With no history (``None``/``[]``, or no recurring
+    finding) NO key is added, so the bundle stays byte-identical to the pre-B4 shape.
     """
     inventories = surface_inventories(profile)
     kind = profile.get("kind")
@@ -134,8 +143,79 @@ def comprehend_input_bundle(profile: dict, *, excerpt_chars: int = 8000) -> dict
         "palette": _palette_facts(profile),
     }
 
+    # B4: only attach the history slice when it is non-empty, so the no-history bundle
+    # is byte-identical to the pre-B4 bundle (every existing comprehend-input test).
+    history = _generation_history_facts(prior_reports)
+    if history:
+        facts["generation_history"] = history
+
     excerpt = _collect_excerpt(profile, catalog, excerpt_chars)
     return {"facts": facts, "excerpt": excerpt}
+
+
+def _generation_history_facts(prior_reports: Optional[list]) -> list[dict]:
+    """Reduce same-shell ``generation_report.json`` digests to a MESSAGE-FREE slice.
+
+    The AMBIGUOUS-remainder signal the model reasons over to propose overrides
+    corrections (Cluster B4): the deterministic ``learn`` step (B3) distils only the
+    recurring findings it can bind to a brand-safe target (a stub role WITH a healthy
+    sibling, a captured demo string); the rest (a stub role with NO sibling, a finding
+    whose right re-point needs judgement) recur silently. This surfaces them so the
+    model can propose a correction through the SAME fail-closed ``merge_overrides`` sink
+    (via ``overlay_overrides`` + the ``propose-overrides`` verb).
+
+    Each fact is STRICTLY ``{check, location, severity, recurred_runs}`` keyed on the
+    universal ``(check, location)`` identity B2/B3 use - NEVER the ``message`` body
+    (which can carry brand/template text), NEVER ``generated_at`` / ``verdict`` - so no
+    brand text leaks into the model's reasoning key. ``recurred_runs`` is the number of
+    distinct reports carrying the pair (a pair seen twice IN one report counts once for
+    that report, mirroring ``overrides._recurrence_counts``); ``severity`` is the
+    MOST-severe seen across the reports (ERROR > WARNING > INFO). Sorted by
+    ``(check, location)`` so the bundle is deterministic. Defensive: a non-dict report /
+    finding, or a finding with no ``check``, is skipped. Returns ``[]`` for an absent /
+    empty history.
+    """
+    if not prior_reports:
+        return []
+    rank = {
+        schema.Severity.ERROR.value: 3,
+        schema.Severity.WARNING.value: 2,
+        schema.Severity.INFO.value: 1,
+    }
+    counts: dict[tuple, int] = {}
+    severities: dict[tuple, Optional[str]] = {}
+    for report in prior_reports:
+        if not isinstance(report, dict):
+            continue
+        seen: set = set()
+        for finding in report.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            check = finding.get("check")
+            if not check:
+                continue
+            key = (check, finding.get("location"))
+            sev = finding.get("severity")
+            if sev is not None:
+                prev = severities.get(key)
+                if prev is None or rank.get(sev, 0) > rank.get(prev, 0):
+                    severities[key] = sev
+            if key in seen:
+                continue  # one report contributes at most 1 to recurred_runs
+            seen.add(key)
+            counts[key] = counts.get(key, 0) + 1
+    facts: list[dict] = []
+    for key in sorted(counts, key=lambda k: (str(k[0]), str(k[1]))):
+        check, location = key
+        facts.append(
+            {
+                "check": check,
+                "location": location,
+                "severity": severities.get(key),
+                "recurred_runs": counts[key],
+            }
+        )
+    return facts
 
 
 def _palette_facts(profile: dict) -> list[dict]:

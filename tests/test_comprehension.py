@@ -1319,5 +1319,158 @@ class CliComprehendTest(unittest.TestCase):
                 os.chdir(old)
 
 
+class GenerationHistoryBundleTest(unittest.TestCase):
+    """B4: the bounded, MESSAGE-FREE ``generation_history`` slice the model reasons
+    over to propose overrides corrections, and the byte-identity of the no-history
+    bundle (no key added when there is no recurring finding)."""
+
+    @staticmethod
+    def _report(findings: list) -> dict:
+        return {
+            "schema_version": "generation-report-1",
+            "kind": "docx",
+            "shell_sha256": "abc123",
+            "findings": findings,
+            "generated_at": "2026-06-09T00:00:00Z",
+        }
+
+    def test_facts_are_message_free(self):
+        reports = [
+            self._report(
+                [
+                    {
+                        "check": "style_fallback",
+                        "location": "heading.9",
+                        "severity": "WARNING",
+                        "message": "BRAND SECRET TEXT",
+                    }
+                ]
+            )
+        ]
+        facts = comp_mod._generation_history_facts(reports)
+        self.assertTrue(facts)
+        for f in facts:
+            self.assertEqual(set(f), {"check", "location", "severity", "recurred_runs"})
+            self.assertNotIn("message", f)
+            self.assertNotIn("generated_at", f)
+            self.assertNotIn("verdict", f)
+
+    def test_recurrence_count_and_most_severe(self):
+        reports = [
+            self._report(
+                [
+                    {
+                        "check": "style_fallback",
+                        "location": "h.9",
+                        "severity": "WARNING",
+                        "message": "a",
+                    },
+                    {
+                        "check": "style_fallback",
+                        "location": "h.9",
+                        "severity": "WARNING",
+                        "message": "dup in same report",
+                    },
+                ]
+            ),
+            self._report(
+                [
+                    {
+                        "check": "style_fallback",
+                        "location": "h.9",
+                        "severity": "ERROR",
+                        "message": "b",
+                    }
+                ]
+            ),
+        ]
+        facts = comp_mod._generation_history_facts(reports)
+        self.assertEqual(len(facts), 1)
+        # 2 reports carry the pair (the dup IN one report counts once for that report).
+        self.assertEqual(facts[0]["recurred_runs"], 2)
+        # Most-severe across the reports (ERROR beats WARNING).
+        self.assertEqual(facts[0]["severity"], "ERROR")
+
+    def test_deterministic_sort(self):
+        reports = [
+            self._report(
+                [
+                    {
+                        "check": "style_fallback",
+                        "location": "z",
+                        "severity": "INFO",
+                        "message": "m",
+                    },
+                    {
+                        "check": "resolver_targets_exist",
+                        "location": "a",
+                        "severity": "INFO",
+                        "message": "m",
+                    },
+                ]
+            )
+        ]
+        facts = comp_mod._generation_history_facts(reports)
+        keys = [(f["check"], f["location"]) for f in facts]
+        self.assertEqual(keys, sorted(keys, key=lambda k: (str(k[0]), str(k[1]))))
+
+    def test_defensive_malformed(self):
+        reports = [
+            "not-a-dict",
+            {"findings": ["x", {"severity": "ERROR"}]},  # finding w/o check is skipped
+            {"findings": [{"check": "c", "location": "L", "severity": "INFO"}]},
+        ]
+        facts = comp_mod._generation_history_facts(reports)
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["check"], "c")
+        self.assertEqual(comp_mod._generation_history_facts(None), [])
+        self.assertEqual(comp_mod._generation_history_facts([]), [])
+
+    def test_bundle_includes_history_when_present(self):
+        prof = _docx_profile_with_inventory()
+        reports = [
+            self._report(
+                [
+                    {
+                        "check": "style_fallback",
+                        "location": "heading.9",
+                        "severity": "WARNING",
+                        "message": "BRAND",
+                    }
+                ]
+            )
+        ]
+        bundle = comp_mod.comprehend_input_bundle(prof, prior_reports=reports)
+        self.assertIn("generation_history", bundle["facts"])
+        gh = bundle["facts"]["generation_history"]
+        self.assertEqual(gh, comp_mod._generation_history_facts(reports))
+        for f in gh:
+            self.assertNotIn("message", f)
+
+    def test_bundle_byte_identical_without_history(self):
+        prof = _docx_profile_with_inventory()
+        base = comp_mod.comprehend_input_bundle(prof)
+        none_h = comp_mod.comprehend_input_bundle(prof, prior_reports=None)
+        empty_h = comp_mod.comprehend_input_bundle(prof, prior_reports=[])
+        self.assertNotIn("generation_history", base["facts"])
+        self.assertEqual(
+            json.dumps(none_h, sort_keys=True), json.dumps(base, sort_keys=True)
+        )
+        self.assertEqual(
+            json.dumps(empty_h, sort_keys=True), json.dumps(base, sort_keys=True)
+        )
+
+    def test_bundle_no_key_when_history_has_no_usable_finding(self):
+        prof = _docx_profile_with_inventory()
+        base = comp_mod.comprehend_input_bundle(prof)
+        # Reports present, but no usable finding -> facts empty -> NO key (byte-id).
+        reports = [self._report([]), "not-a-dict"]
+        bundle = comp_mod.comprehend_input_bundle(prof, prior_reports=reports)
+        self.assertNotIn("generation_history", bundle["facts"])
+        self.assertEqual(
+            json.dumps(bundle, sort_keys=True), json.dumps(base, sort_keys=True)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

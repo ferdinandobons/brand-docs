@@ -566,10 +566,10 @@ template-derived (no hardcoded colors/names/language). Applied on all three form
 
 ---
 
-## 14. Learn-from-errors (`generation_report.json` + `rules.overrides` + `learn`)
+## 14. Learn-from-errors (`generation_report.json` + `rules.overrides` + `learn` + `propose-overrides`)
 
-The deterministic feedback loop (Cluster B core; the model-proposed phase is a later
-increment). Three additive layers, format-uniform, schema stays **1.2.0**:
+The feedback loop: a deterministic core (Cluster B1-B3) plus a model-assisted phase
+(B4, `propose-overrides`). Format-uniform, schema stays **1.2.0**:
 
 ### The persisted run report (`qa/report.py`)
 Every `generate` writes `generation_report.json` into the same `<output>.visual`
@@ -614,6 +614,26 @@ style/font/hex. `check_override_targets` (gate-wired, `override_targets_exist`)
 re-proves every lesson against the live shell at verify. Lessons are ADVISORY
 until an explicit `learn --accept` (mirroring `verify --accept`); with no accepted
 lesson the resolver takes zero new branches and generation is **byte-identical**.
+
+### The `propose-overrides` verb (model-assisted, Cluster B4)
+`learn` binds only the findings it can resolve deterministically; the **ambiguous
+remainder** (a stub role with no healthy sibling, a finding whose right re-point
+needs judgement) is surfaced to the model in the `comprehend-input` bundle under
+`facts.generation_history` - a bounded, **message-free** list of
+`{check, location, severity, recurred_runs}` (keyed on the universal
+`(check, location)` identity, never the brand-bearing message). The model authors an
+overrides proposal naming only shell-backed pointers; `propose-overrides`
+**overlays** it onto any existing lesson (`overrides.overlay_overrides`, additive: a
+deterministic lesson and a model proposal coexist, the proposal winning a key
+collision) and routes the WHOLE combined block through the SAME `merge_overrides`
+sink - one writer, one sort order, one fail-closed membership/acyclicity gate. It is
+ADVISORY until `propose-overrides --accept` (mirroring `learn --accept`), so a single
+noisy proposal can never mint a live correction. Every LIVE override is auditable: a
+gate-wired `check_overrides_applied` emits an INFO `override_applied` finding per live
+entry (in `generate` and `verify` alike, gated on `store.overrides_are_present`), so a
+learned re-point is never silent; INFO-only, never in `DEFAULT_L0_INVARIANTS`, so it
+can never flip a verdict, and not in `LEARNABLE_CHECKS` (an audit trail never feeds
+itself).
 
 ---
 

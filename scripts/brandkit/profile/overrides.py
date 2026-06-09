@@ -338,6 +338,90 @@ def _reject_overrides(
 
 
 # ---------------------------------------------------------------------------
+# overlay_overrides -- additive overlay of a model proposal onto an existing lesson
+# ---------------------------------------------------------------------------
+def overlay_overrides(existing: dict, delta: dict) -> dict:
+    """Overlay a model-authored overrides ``delta`` onto an EXISTING lesson (B4).
+
+    :func:`merge_overrides` is REPLACE-from-single-source (``_canonicalize_overrides``
+    rebuilds a fresh :func:`schema.empty_overrides` and copies only what the proposal
+    carries), so handing a raw model delta straight to it would WIPE a deterministic
+    ``learn`` lesson already on the profile. This primitive - the overrides peer of
+    :func:`comprehension.overlay_refinement` - returns a NEW proposal dict that is the
+    existing block with the delta's three closed-kind containers overlaid, ready to
+    route WHOLE through ``merge_overrides`` (which re-runs shape + fail-closed
+    membership + acyclicity on the COMBINED block). So a model proposal is ADDITIVE to
+    a deterministic lesson rather than clobbering it, and every pointer - old or new -
+    is re-bound by the single sink.
+
+    Closed-key, per-sink semantics (pure; ``existing`` / ``delta`` are not mutated):
+      - ``reroute_roles`` / ``number_format_swaps``: shallow MAP update (a delta key
+        replaces the matching existing entry, a new key is added);
+      - ``demo_clears``: SET-UNION, sorted (a re-stated value never duplicates);
+      - ``provenance``: shallow MAP update (a delta entry replaces the matching one);
+      - ``confidence`` / ``generated_by``: the delta's value when present, else the
+        existing one.
+
+    ``status`` / ``source_shell_sha256`` are deliberately NOT carried over: the
+    combined block is a TRIAL proposal ``merge_overrides`` disposes (forces ``present``
+    for the binding gates) and re-stamps from the live shell, so a stale freeze stamp
+    can never ride along. A non-dict ``existing`` / ``delta`` degrades to ``{}``.
+    """
+    import copy
+
+    existing = existing if isinstance(existing, dict) else {}
+    if not isinstance(delta, dict):
+        delta = {}
+
+    out: dict = {}
+
+    # (a) map sinks: shallow update keyed by id (string key -> string value only).
+    for sink in ("reroute_roles", "number_format_swaps"):
+        base = existing.get(sink)
+        merged = dict(base) if isinstance(base, dict) else {}
+        d = delta.get(sink)
+        if isinstance(d, dict):
+            for key, val in d.items():
+                if isinstance(key, str) and key and isinstance(val, str):
+                    merged[key] = val
+        out[sink] = merged
+
+    # (b) demo_clears: set-union, sorted (a re-stated value never duplicates).
+    clears = {
+        c for c in (existing.get("demo_clears") or []) if isinstance(c, str) and c
+    }
+    d_clears = delta.get("demo_clears")
+    if isinstance(d_clears, list):
+        clears |= {c for c in d_clears if isinstance(c, str) and c}
+    out["demo_clears"] = sorted(clears)
+
+    # (c) provenance: shallow map update (delta wins on key collision).
+    base_prov = existing.get("provenance")
+    prov = copy.deepcopy(base_prov) if isinstance(base_prov, dict) else {}
+    d_prov = delta.get("provenance")
+    if isinstance(d_prov, dict):
+        for key, val in d_prov.items():
+            if isinstance(key, str) and key:
+                prov[key] = copy.deepcopy(val)
+    out["provenance"] = prov
+
+    # (d) advisory scalars: delta's if present, else the existing one.
+    conf = delta.get("confidence")
+    if conf is None:
+        conf = existing.get("confidence")
+    if isinstance(conf, (int, float)):
+        out["confidence"] = float(conf)
+
+    gen = delta.get("generated_by")
+    if gen is None:
+        gen = existing.get("generated_by")
+    if gen is not None:
+        out["generated_by"] = copy.deepcopy(gen)
+
+    return out
+
+
+# ---------------------------------------------------------------------------
 # learn -- deterministic distillation of recurring findings into a proposal
 # ---------------------------------------------------------------------------
 def _recurrence_counts(

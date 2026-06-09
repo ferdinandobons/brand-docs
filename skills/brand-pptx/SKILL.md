@@ -105,6 +105,15 @@ python scripts/brandkit/cli.py refine --name <brand> --input refinement.json --a
 A refinement improves **FUTURE** generations of this brand only - it mutates the
 saved profile, never the `.pptx` you just produced. To apply it, generate again.
 
+When the SAME QA finding recurs across runs, you can also propose a **shell-bound
+correction** with `propose-overrides`: the `comprehend-input` bundle surfaces the
+recurring `generation_history`, and you NAME a shell-backed re-point (a stub role to
+an existing healthy role, a `number_format` mask the shell uses, or a captured demo
+value) that the engine binds fail-closed (see
+[reference/comprehension.md](reference/comprehension.md)). It is advisory until
+`--accept`, improves **FUTURE** generations only, and every live correction surfaces
+as an INFO `override_applied` finding in QA.
+
 ## Internal Extract
 
 ```bash
