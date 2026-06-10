@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/hero.png" alt="BrandDocs workflow: a real Word, PowerPoint or Excel template is extracted into a reusable Brand Profile, then composed and verified into on-brand DOCX, PPTX and XLSX output" width="100%" />
+<img src="assets/hero.webp" alt="BrandDocs workflow: one real Word, PowerPoint or Excel template is extracted into a verified, reusable Brand Profile, which then generates unlimited on-brand DOCX, PPTX and XLSX documents in the same format" width="100%" />
 
 <br/>
 
