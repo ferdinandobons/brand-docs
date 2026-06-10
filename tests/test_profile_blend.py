@@ -425,13 +425,23 @@ class BlendMergeTest(unittest.TestCase):
         # produces byte-identical profile.json (commutative corroboration).
         # Each order runs in its own root with the SAME profile name and the
         # donors keep their own stable filenames (both are recorded facts).
+        # The primary SHELL is built once and shared by both roots: a docx
+        # saved by python-docx carries wall-clock zip timestamps (2-second DOS
+        # resolution), so two separate builds straddling a tick would differ
+        # in provenance.shell.sha256 and flake the byte-equality below.
         donor_a = (b"donor-bytes-a", "a.docx")
         donor_b = (b"donor-bytes-b", "b.docx")
+        shared_shell = _shell_bytes()
         outputs = []
         for sub, order in (("ab", (donor_a, donor_b)), ("ba", (donor_b, donor_a))):
             root = self.tmp / f"order-{sub}"
             root.mkdir()
-            _primary(root, name="order", roles=copy.deepcopy(donor_roles))
+            _primary(
+                root,
+                name="order",
+                roles=copy.deepcopy(donor_roles),
+                shell=shared_shell,
+            )
             for payload, filename in order:
                 loaded = store.load_profile("order", "project", cwd=root)
                 result = blend_mod.blend(loaded, donor(), payload, filename)
