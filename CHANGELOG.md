@@ -4,6 +4,11 @@ All notable changes to BrandDocs are documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-07-10
+
+Reliability and security hardening release for OOXML package boundaries,
+atomic generation, XLSX extension preservation, sparse worksheets, and CI.
+
 ### Security
 
 - The live extract, generate, deterministic-QA and visual-render boundaries now
@@ -1025,6 +1030,7 @@ Initial public alpha release.
   share the same engine and are intentionally catching up through the eval
   suite and visual repair workflow.
 
+[0.10.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.10.1
 [0.10.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.10.0
 [0.9.0]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.9.0
 [0.8.1]: https://github.com/ferdinandobons/brand-docs/releases/tag/v0.8.1
