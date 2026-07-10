@@ -23,6 +23,7 @@ def extract(
     cwd: str | Path | None = None,
 ) -> Path:
     template_path = Path(template)
+    pack.validate_package(template_path)
     shell_bytes = template_path.read_bytes()
     doc = Document(template_path)
 

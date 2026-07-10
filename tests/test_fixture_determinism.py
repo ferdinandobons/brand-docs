@@ -196,21 +196,18 @@ class FixtureDeterminismGuard(unittest.TestCase):
 
     def _check(self, stem: str, filename: str) -> None:
         committed = _COMPLEX / filename
-        if not committed.exists():
-            raise unittest.SkipTest(f"missing committed fixture {committed}")
+        self.assertTrue(committed.exists(), f"missing committed fixture {committed}")
         try:
             builder = _load_builder(stem)
-        except unittest.SkipTest:
-            raise
-        except Exception as exc:  # missing lib / import error -> skip, don't fail
-            raise unittest.SkipTest(f"builder for {stem} unavailable: {exc!r}")
+        except Exception as exc:
+            self.fail(f"builder for {stem} unavailable: {exc!r}")
 
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / filename
             try:
                 builder.build(out)
-            except Exception as exc:  # builder cannot run here -> skip, don't fail
-                raise unittest.SkipTest(f"builder for {stem} could not run: {exc!r}")
+            except Exception as exc:
+                self.fail(f"builder for {stem} could not run: {exc!r}")
             self.assertTrue(out.exists(), f"builder for {stem} produced no file")
             _compare_zip(self, committed.read_bytes(), out.read_bytes(), "")
 
@@ -249,22 +246,19 @@ class ExampleTemplateDeterminismGuard(unittest.TestCase):
 
     def _check(self, stem: str, filename: str) -> None:
         committed = _EX_TEMPLATES / filename
-        if not committed.exists():
-            raise unittest.SkipTest(f"missing committed example template {committed}")
+        self.assertTrue(
+            committed.exists(), f"missing committed example template {committed}"
+        )
         try:
             builder = _load_example_builder(stem)
-        except unittest.SkipTest:
-            raise
-        except Exception as exc:  # missing lib / import error -> skip, don't fail
-            raise unittest.SkipTest(f"example builder for {stem} unavailable: {exc!r}")
+        except Exception as exc:
+            self.fail(f"example builder for {stem} unavailable: {exc!r}")
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / filename
             try:
                 builder.build(out)
-            except Exception as exc:  # builder cannot run here -> skip, don't fail
-                raise unittest.SkipTest(
-                    f"example builder for {stem} could not run: {exc!r}"
-                )
+            except Exception as exc:
+                self.fail(f"example builder for {stem} could not run: {exc!r}")
             self.assertTrue(
                 out.exists(), f"example builder for {stem} produced no file"
             )

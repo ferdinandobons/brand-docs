@@ -378,6 +378,11 @@ saved profile's history). New ids follow `{entity}_{predicate}` in lowercase sna
 deviate from the pattern (e.g. `appearance_table_targets`, `schema`) are grandfathered,
 not a template to copy.
 
+`extension_survival` is a load-bearing XLSX structural diff: every worksheet
+extension URI/count present in the shell must survive generation. The generator
+restores self-contained sparkline extensions at the raw OOXML layer; an unsupported
+extension that cannot be preserved fails explicitly rather than disappearing.
+
 ---
 
 ## 10. Units

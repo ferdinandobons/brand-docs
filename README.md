@@ -9,7 +9,7 @@
 **BrandDocs is a set of agent skills that learn your existing Word, PowerPoint and Excel templates and generate new on-brand documents from them.** Unlike generic AI document generators, it preserves **brand, structure, styles and formulas by construction**. Built for Claude Code, Codex and compatible AI agents.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-3B82F6.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](https://www.python.org/)
+[![Python 3.10-3.13](https://img.shields.io/badge/python-3.10--3.13-3776AB.svg)](https://www.python.org/)
 [![CI](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml/badge.svg)](https://github.com/ferdinandobons/brand-docs/actions/workflows/ci.yml)
 [![Website](https://img.shields.io/badge/website-GitHub%20Pages-16A34A.svg)](https://ferdinandobons.github.io/brand-docs/)
 [![Latest release](https://img.shields.io/github/v/release/ferdinandobons/brand-docs?label=latest%20release)](https://github.com/ferdinandobons/brand-docs/releases/latest)
@@ -54,13 +54,18 @@ All three share one engine and expose the same verbs: **`extract` → `comprehen
 
 **Two-phase by design:** the deterministic engine works with **no model at all** (extract / verify / generate, fully offline); the model-assisted verbs sit ON TOP and can only NAME captured facts - every proposal is validated fail-closed, so the brand guarantee never depends on a model being right.
 
+**Published only after proof:** generation preflights the profile and shell, writes
+to a same-directory temporary file, and atomically publishes the requested output
+only after deterministic QA passes. XLSX also preserves formulas and raw worksheet
+extensions such as sparkline groups; extension loss is a blocking QA error.
+
 ---
 
 ## Prerequisites
 
 BrandDocs runs locally and needs a few things installed **before first use**:
 
-- **Python ≥ 3.10** plus the packages in [`requirements.txt`](requirements.txt) (`python-docx`, `python-pptx`, `openpyxl`, `lxml`, `Pillow`):
+- **Python 3.10-3.13** plus the packages in [`requirements.txt`](requirements.txt) (`python-docx`, `python-pptx`, `openpyxl`, `lxml`, `Pillow`):
   ```bash
   pip install -r requirements.txt
   ```

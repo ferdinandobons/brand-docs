@@ -25,6 +25,7 @@ from brandkit.formats.docx.styles import lookup_style
 from brandkit.ir import components
 from brandkit.ir import model as ir
 from brandkit.ooxml import chart as chartlib
+from brandkit.ooxml import pack
 from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
 from brandkit.profile.reconcile import confidence_clears_floor
@@ -66,6 +67,7 @@ def generate(
     back to ``Normal``.
     """
     sink: list[Finding] = findings if findings is not None else []
+    pack.validate_package(shell_path)
     idoc = components.expand_components(idoc, profile)
     doc = Document(shell_path)
 

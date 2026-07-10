@@ -23,6 +23,7 @@ def extract(
     cwd: str | Path | None = None,
 ) -> Path:
     template_path = Path(template)
+    pack.validate_package(template_path)
     prs = Presentation(template_path)
     layouts = _layouts(prs)
     # ONE layout/slide classification pass shared by every consumer below

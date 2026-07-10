@@ -2,7 +2,7 @@
 # PLUGIN (see .claude-plugin/plugin.json), not as a pip package, so there is no
 # build-system here. This file exists to declare the supported-Python floor in
 # the standard, discoverable place; the CI matrix (.github/workflows/ci.yml)
-# enforces it by running the suite on 3.10 / 3.11 / 3.12.
+# enforces it by running the suite on 3.10 / 3.11 / 3.12 / 3.13.
 #
 # Ruff config lives in the tracked ruff.toml (which takes precedence over any
 # [tool.ruff] here), so it is intentionally not duplicated below.
@@ -10,5 +10,14 @@
 name = "brand-docs"
 version = "0.10.0"
 description = "AI on-brand document generator: turn a company's Office template into unlimited on-brand .docx/.pptx/.xlsx."
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 license = { text = "MIT" }
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "error",
+    # Accounted for explicitly: openpyxl cannot model x14 sparkline groups, so
+    # BrandDocs preserves them at the raw OOXML layer and extension_survival QA
+    # fails if they disappear. All other warnings remain errors.
+    "ignore:Sparkline Group extension is not supported and will be removed:UserWarning:openpyxl.worksheet._reader",
+]

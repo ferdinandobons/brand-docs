@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.chart import (
     AreaChart,
@@ -38,6 +37,7 @@ from openpyxl.utils.cell import range_boundaries
 
 from brandkit.common import appearance
 from brandkit.common import color as colorutil
+from brandkit.formats.xlsx import package as xlsx_package
 from brandkit.grid.model import GridDocument
 from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
@@ -64,7 +64,7 @@ def generate(
     profile proved exists is rejected (never invented).
     """
     sink: list[Finding] = findings if findings is not None else []
-    wb = load_workbook(shell_path, data_only=False)
+    wb = xlsx_package.load_workbook_checked(shell_path, data_only=False)
     resolver = ProfileResolver(profile)
 
     # The named-range geometry the resolver's ``named_range`` ops point at. This is
@@ -193,6 +193,7 @@ def generate(
     if _shell_created_iso(shell_path) is None:
         wb.properties.created = datetime(1980, 1, 1, tzinfo=timezone.utc)
     wb.save(out)
+    xlsx_package.restore_supported_extensions(shell_path, out)
     # Byte-idempotency (X7): openpyxl's writer stamps the current wall-clock time
     # into every ZIP entry header AND into ``docProps/core.xml`` ``dcterms:modified``
     # at save (overriding ``wb.properties.modified``), so two otherwise-identical
@@ -778,15 +779,16 @@ def _clear_region(wb, target: dict, *, skip_rows: int = 0) -> bool:
     except Exception:
         return False
     ws = wb[sheet]
-    for r in range(min_row + skip_rows, max_row + 1):
-        for c in range(min_col, max_col + 1):
-            cell = ws.cell(row=r, column=c)
-            if isinstance(cell, MergedCell):
-                continue  # a merged slave is read-only; clearing it is a no-op by
-                # design (the merge anchor carries the value, slaves inherit it)
-            if _holds_formula(cell):
-                continue  # preserve formulas
-            cell.value = None
+    # Empty cells need no clearing. Iterating only materialized cells prevents a
+    # whole-column named range from visiting/materializing 1,048,576 cells.
+    for (r, c), cell in ws._cells.items():
+        if r < min_row + skip_rows or r > max_row or c < min_col or c > max_col:
+            continue
+        if isinstance(cell, MergedCell):
+            continue  # merged slaves inherit the anchor and are read-only
+        if _holds_formula(cell):
+            continue  # preserve formulas
+        cell.value = None
     return True
 
 

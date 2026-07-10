@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import shutil
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Union
 
@@ -98,6 +99,9 @@ def parse_xml_bytes(data: bytes) -> etree._Element:
 # itself enforces them against the actual stream.
 MAX_PART_UNCOMPRESSED = 512 * 1024 * 1024  # bytes, per part
 MAX_PACKAGE_UNCOMPRESSED = 2 * 1024 * 1024 * 1024  # bytes, whole package
+MAX_PACKAGE_COMPRESSED = 512 * 1024 * 1024  # bytes, archive on disk
+MAX_PACKAGE_ENTRIES = 50_000
+MAX_COMPRESSION_RATIO = 10_000
 
 
 def _assert_inflation_safe(zf: zipfile.ZipFile, src: PathLike) -> None:
@@ -115,6 +119,80 @@ def _assert_inflation_safe(zf: zipfile.ZipFile, src: PathLike) -> None:
                 f"{src}: package declares more than "
                 f"{MAX_PACKAGE_UNCOMPRESSED} total uncompressed bytes"
             )
+
+
+def validate_package(src: PathLike) -> Path:
+    """Validate an OOXML package before handing it to a third-party parser.
+
+    ``python-docx``, ``python-pptx``, ``openpyxl`` and LibreOffice all expand ZIP
+    members internally.  The engine therefore applies its resource and package
+    integrity limits at the shared input boundary, before any of those consumers
+    sees attacker-controlled bytes.  The check is metadata-only: legitimate files
+    are not unpacked or rewritten.
+
+    Raises:
+        PackError: for a missing/non-file input, an invalid ZIP/OOXML package,
+            duplicate or unsafe member names, excessive archive/entry sizes, an
+            excessive compression ratio, or a missing ``[Content_Types].xml``.
+    """
+    path = Path(src)
+    if not path.is_file():
+        raise PackError(f"{path} is not a file")
+    try:
+        compressed_size = path.stat().st_size
+    except OSError as exc:
+        raise PackError(f"could not stat OOXML package {path}: {exc}") from exc
+    if compressed_size > MAX_PACKAGE_COMPRESSED:
+        raise PackError(
+            f"{path}: archive is {compressed_size} bytes (max {MAX_PACKAGE_COMPRESSED})"
+        )
+
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            infos = zf.infolist()
+            if len(infos) > MAX_PACKAGE_ENTRIES:
+                raise PackError(
+                    f"{path}: package contains {len(infos)} entries "
+                    f"(max {MAX_PACKAGE_ENTRIES})"
+                )
+            names = [info.filename for info in infos]
+            duplicates = sorted(
+                name for name, count in Counter(names).items() if count > 1
+            )
+            if duplicates:
+                shown = ", ".join(repr(name) for name in duplicates[:5])
+                suffix = " ..." if len(duplicates) > 5 else ""
+                raise PackError(f"{path}: duplicate package part(s): {shown}{suffix}")
+            if CONTENT_TYPES_PART not in names:
+                raise PackError(f"{path}: missing required {CONTENT_TYPES_PART!r}")
+
+            _assert_inflation_safe(zf, path)
+            for info in infos:
+                normalized = info.filename.replace("\\", "/")
+                segments = normalized.split("/")
+                if (
+                    "\\" in info.filename
+                    or normalized.startswith("/")
+                    or ".." in segments
+                    or (segments and segments[0].endswith(":"))
+                ):
+                    raise PackError(
+                        f"{path}: unsafe package part path {info.filename!r}"
+                    )
+                if info.file_size <= 0:
+                    continue
+                denominator = max(info.compress_size, 1)
+                ratio = info.file_size / denominator
+                if ratio > MAX_COMPRESSION_RATIO:
+                    raise PackError(
+                        f"{path}: part {info.filename!r} compression ratio "
+                        f"{ratio:.0f}:1 exceeds max {MAX_COMPRESSION_RATIO}:1"
+                    )
+    except zipfile.BadZipFile as exc:
+        raise PackError(f"{path} is not a valid OOXML/ZIP package") from exc
+    except OSError as exc:
+        raise PackError(f"could not read OOXML package {path}: {exc}") from exc
+    return path
 
 
 def unpack(src: PathLike, dest_dir: PathLike, *, overwrite: bool = True) -> Path:

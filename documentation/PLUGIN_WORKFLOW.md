@@ -208,6 +208,7 @@ generated/<job>/
 | Native object loss | `component_survival` warning | ensure the native writer is used (charts, SmartArt, merged tables, docx TOC); explain only a genuinely unsupported object (e.g. a `divider` on pptx, which has no native form) |
 | XLSX range overflow | named range bounds error | split data, shrink input, or ask user to expand template range |
 | Formula loss | formula preservation finding | stop and repair generator; never ship silently |
+| XLSX extension loss | `extension_survival` error | restore the supported raw OOXML extension or reject the output; never ship a workbook with silently removed native objects |
 
 ## Round Budget Policy
 

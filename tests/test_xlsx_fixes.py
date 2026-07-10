@@ -33,8 +33,10 @@ from openpyxl.workbook.defined_name import DefinedName
 
 from brandkit.formats.xlsx import extract as xlsx_extract
 from brandkit.formats.xlsx import generate as xlsx_generate
+from brandkit.formats.xlsx import structure as xlsx_structure
 from brandkit.grid.model import GridDocument
-from brandkit.profile import store
+from brandkit.profile import schema, store
+from brandkit.qa.gate import run_qa
 from brandkit.qa.model import Finding
 
 
@@ -85,6 +87,78 @@ class FillClearChokePointMergedCellGuard(unittest.TestCase):
         _wb, ws = self._merged_ws()
         # Setting .style on a MergedCell raises; the guard must skip it (no crash).
         xlsx_generate._reassert_cover_style(ws["B1"], "Normal")
+
+
+class NamedRangeAndSparseWorkbookHardening(unittest.TestCase):
+    def test_full_column_named_range_is_bounded_to_used_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shell = root / "full-column.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Data"
+            ws["A1"] = "header"
+            ws["A5"] = "last used"
+            wb.defined_names.add(DefinedName("full_column", attr_text="'Data'!$A:$A"))
+            wb.save(shell)
+
+            xlsx_extract.extract(shell, "full-column", scope="project", cwd=root)
+            loaded = store.load_profile("full-column", "project", cwd=root)
+            region = loaded.profile["surface"]["xlsx"]["named_regions"]["full_column"]
+            self.assertEqual(region["range"], "$A$1:$A$5")
+            out = root / "out.xlsx"
+            xlsx_generate.generate(
+                loaded.profile,
+                loaded.shell_path,
+                GridDocument(regions={"full_column": [["new header"]]}),
+                out,
+            )
+            self.assertEqual(load_workbook(out)["Data"]["A1"].value, "new header")
+
+    def test_discontiguous_named_range_fails_explicitly(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            shell = root / "multi-area.xlsx"
+            wb = Workbook()
+            wb.active.title = "Data"
+            wb.defined_names.add(
+                DefinedName(
+                    "multi_area",
+                    attr_text="'Data'!$A$1:$A$2,'Data'!$C$1:$C$2",
+                )
+            )
+            wb.save(shell)
+            with self.assertRaisesRegex(
+                xlsx_structure.NamedRegionError, "discontiguous destinations"
+            ):
+                xlsx_extract.extract(shell, "multi-area", scope="project", cwd=root)
+
+    def test_l0_text_scan_is_sparse_safe_at_excel_max_corner(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "sparse.xlsx"
+            wb = Workbook()
+            ws = wb.active
+            ws["A1"] = "start"
+            ws["XFD1048576"] = "edge"
+            wb.save(path)
+            profile = schema.build_envelope("xlsx", {"name": "sparse"})
+            report = run_qa(path, profile, qa="fast")
+            self.assertTrue(report.passed)
+
+    def test_clear_region_visits_only_materialized_cells(self) -> None:
+        wb = Workbook()
+        ws = wb.active
+        ws["A1"] = "demo"
+        ws["A1000000"] = "tail"
+        ws["A1048576"] = "=1+1"
+        before = len(ws._cells)
+        self.assertTrue(
+            xlsx_generate._clear_region(wb, {"sheet": ws.title, "range": "A1:A1048576"})
+        )
+        self.assertEqual(len(ws._cells), before)
+        self.assertIsNone(ws["A1"].value)
+        self.assertIsNone(ws["A1000000"].value)
+        self.assertEqual(ws["A1048576"].value, "=1+1")
 
 
 class MergedBannerRegionEndToEnd(unittest.TestCase):

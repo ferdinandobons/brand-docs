@@ -45,7 +45,7 @@ the engine and are catching up.
 | `brand-docx`: extract → verify → generate | ✅ working |
 | Document **structure** extraction & order-aware generation | ✅ working |
 | Brand-guarantee enforcement (`verify` fails on missing artifacts) | ✅ working |
-| Deterministic QA (L0: styles, palette, residual text, tables, formula preservation, language) | ✅ working |
+| Deterministic QA (L0: styles, palette, residual text, tables, formula and XLSX extension preservation, language) | ✅ working |
 | `brand-pptx`: roles from real layouts, native charts / SmartArt / merged tables | ✅ working (fidelity still catching up to docx) |
 | `brand-xlsx`: named-region fills, formula-preserving, native charts | ✅ working (fidelity still catching up to docx) |
 | Visual QA (LibreOffice render + manifest-driven repair loop) | 🚧 implemented with graceful degraded mode |

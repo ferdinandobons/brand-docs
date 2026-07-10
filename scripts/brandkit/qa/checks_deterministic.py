@@ -73,21 +73,23 @@ def _memo_load(kind: str, path, loader):
 def _load_docx(path):
     from docx import Document
 
-    return _memo_load("docx", path, Document)
+    return _memo_load("docx", path, lambda p: Document(pack.validate_package(p)))
 
 
 def _load_pptx(path):
     from pptx import Presentation
 
-    return _memo_load("pptx", path, Presentation)
+    return _memo_load("pptx", path, lambda p: Presentation(pack.validate_package(p)))
 
 
 def _load_xlsx(path):
     # Every QA workbook read uses the SAME flags (data_only=False), so the memo
     # never needs to key on loader options.
-    from openpyxl import load_workbook
+    from brandkit.formats.xlsx import package as xlsx_package
 
-    return _memo_load("xlsx", path, lambda p: load_workbook(p, data_only=False))
+    return _memo_load(
+        "xlsx", path, lambda p: xlsx_package.load_workbook_checked(p, data_only=False)
+    )
 
 
 def check_profile(profile: dict) -> list[Finding]:
@@ -413,7 +415,7 @@ def check_resolver_targets(shell, profile: dict) -> list[Finding]:
         findings.append(
             Finding(
                 "resolver_targets_exist",
-                schema.Severity.WARNING.value,
+                schema.Severity.ERROR.value,
                 f"could not verify resolver targets against shell: {exc}",
             )
         )
@@ -2527,7 +2529,7 @@ def check_formula_preservation(shell, output, profile: dict) -> list[Finding]:
         return [
             Finding(
                 "formula_preservation",
-                schema.Severity.WARNING.value,
+                schema.Severity.ERROR.value,
                 f"could not verify formula preservation: {exc}",
             )
         ]
@@ -2569,6 +2571,50 @@ def check_formula_preservation(shell, output, profile: dict) -> list[Finding]:
                 location=address,
             )
         )
+    return findings
+
+
+def check_xlsx_extension_survival(shell, output, profile: dict) -> list[Finding]:
+    """ERROR when a shell worksheet extension is missing from the XLSX output.
+
+    openpyxl does not model every worksheet extension and can remove unsupported
+    ``extLst`` children during save. Sparkline groups are restored by the XLSX
+    package layer; this independent live-package diff prevents that or any other
+    extension family from disappearing silently.
+    """
+    if shell is None or output is None:
+        return []
+    if profile.get("kind") != schema.Kind.XLSX.value:
+        return []
+    from brandkit.formats.xlsx import package as xlsx_package
+
+    try:
+        before = xlsx_package.worksheet_extension_counts(shell)
+        after = xlsx_package.worksheet_extension_counts(output)
+    except Exception as exc:
+        return [
+            Finding(
+                "extension_survival",
+                schema.Severity.ERROR.value,
+                f"could not verify worksheet extension survival: {exc}",
+            )
+        ]
+    findings: list[Finding] = []
+    for sheet_name in sorted(before):
+        for uri, count in sorted(before[sheet_name].items()):
+            output_counts = after.get(sheet_name)
+            output_count = 0 if output_counts is None else output_counts[uri]
+            if output_count >= count:
+                continue
+            findings.append(
+                Finding(
+                    "extension_survival",
+                    schema.Severity.ERROR.value,
+                    f"worksheet extension {uri!r} on {sheet_name!r} dropped "
+                    f"{count} -> {output_count} between shell and output",
+                    location=f"{sheet_name}:{uri}",
+                )
+            )
     return findings
 
 
@@ -2719,18 +2765,19 @@ def check_xlsx(path, profile: dict, shell=None) -> list[Finding]:
     wb = _load_xlsx(path)
     cell_texts: list[str] = []
     for ws in wb.worksheets:
-        for row in ws.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, str):
-                    cell_texts.append(cell.value)
-                    for hit in textutil.find_markdown_literals(cell.value):
-                        findings.append(
-                            Finding(
-                                "no_literal_markdown",
-                                schema.Severity.ERROR.value,
-                                f"literal markdown leaked: {hit['match']!r}",
-                            )
+        # Sparse-safe: a single styled cell at XFD1048576 must not make QA walk
+        # the entire max_row x max_column rectangle or materialize empty cells.
+        for cell in ws._cells.values():
+            if isinstance(cell.value, str):
+                cell_texts.append(cell.value)
+                for hit in textutil.find_markdown_literals(cell.value):
+                    findings.append(
+                        Finding(
+                            "no_literal_markdown",
+                            schema.Severity.ERROR.value,
+                            f"literal markdown leaked: {hit['match']!r}",
                         )
+                    )
     # Uniform, model-free residual check across all kinds.
     text = "\n".join(cell_texts)
     findings.extend(check_residual_template_text(text, profile))
@@ -2738,5 +2785,6 @@ def check_xlsx(path, profile: dict, shell=None) -> list[Finding]:
     # Deterministic structural diffs that the text scan above is blind to: a fill
     # that erased a shell formula, or a native component lost in the output.
     findings.extend(check_formula_preservation(shell, path, profile))
+    findings.extend(check_xlsx_extension_survival(shell, path, profile))
     findings.extend(check_component_survival(shell, path, profile))
     return findings

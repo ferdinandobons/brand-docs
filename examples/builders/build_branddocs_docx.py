@@ -1566,7 +1566,7 @@ def _build_callout(doc):
     # DOCX-A4: the callout body run carries its brand navy directly; DOCX-A6: a
     # BrandDocsLeadIn small-caps navy lead-in opens it.
     p = _p(doc, "", "BrandDocsCallout")
-    _add_styled_run(p, "Note. ", "BrandDocsLeadIn", color=BRAND_NAVY)
+    _add_styled_run(p, "Note. ", "BrandDocs Lead-in", color=BRAND_NAVY)
     run = p.add_run(
         "BrandDocs Corp is a synthetic, fictional company used to demonstrate an "
         "on-brand internal brief. All figures, names, and regions in this template "
@@ -1586,7 +1586,7 @@ def _build_editorial_quote(doc):
     run = p.add_run("Design rule: preserve proven structure only while it ")
     run.font.color.rgb = RGBColor.from_string(BRAND_NAVY)
     _add_styled_run(
-        p, "improves the final artifact", "BrandDocsEmphasis", color=BRAND_TEAL
+        p, "improves the final artifact", "BrandDocs Emphasis", color=BRAND_TEAL
     )
     run2 = p.add_run(
         ". If visual QA shows blank space, stale content, or broken flow, "

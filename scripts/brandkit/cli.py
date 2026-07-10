@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -344,6 +346,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if report.passed else 1
     if args.cmd == "generate":
         loaded = store.load_profile(args.name, args.scope)
+        # Validate the complete profile/shell contract BEFORE authoring bytes. A
+        # drifted shell or invalid resolver must never reach a generator and must
+        # never overwrite a previously-good output.
+        try:
+            preflight = run_qa(None, loaded.profile, qa="fast", shell=loaded.shell_path)
+        except Exception as exc:
+            print(f"ERROR generate preflight: {exc}")
+            return 1
+        if not preflight.passed:
+            for finding in preflight.findings:
+                print(f"{finding.severity} {finding.check}: {finding.message}")
+            print("ERROR generate preflight failed; output was not created")
+            return 1
+
         data = json.loads(Path(args.input).read_text(encoding="utf-8"))
         gen_findings: list = []
         # The content hash is taken from the CANONICAL parsed input (``to_dict()``),
@@ -351,6 +367,15 @@ def main(argv: list[str] | None = None) -> int:
         # equal, which is what B2 keys "same input" on. ``None`` when the parse
         # produced no canonical form (never blocks generation).
         content_hash: str | None = None
+        final_output = Path(args.output)
+        final_output.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{final_output.stem}.",
+            suffix=final_output.suffix,
+            dir=final_output.parent,
+        )
+        os.close(fd)
+        temp_output = Path(tmp_name)
         try:
             if loaded.kind == "docx":
                 from brandkit.formats.docx import generate as docx_generate
@@ -361,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
                     loaded.profile,
                     loaded.shell_path,
                     idoc,
-                    args.output,
+                    temp_output,
                     findings=gen_findings,
                 )
             elif loaded.kind == "pptx":
@@ -373,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
                     loaded.profile,
                     loaded.shell_path,
                     idoc,
-                    args.output,
+                    temp_output,
                     findings=gen_findings,
                 )
             elif loaded.kind == "xlsx":
@@ -385,18 +410,19 @@ def main(argv: list[str] | None = None) -> int:
                     loaded.profile,
                     loaded.shell_path,
                     grid,
-                    args.output,
+                    temp_output,
                     findings=gen_findings,
                 )
             else:
                 raise ValueError(f"unsupported profile kind: {loaded.kind}")
         except Exception as exc:
+            temp_output.unlink(missing_ok=True)
             print(f"ERROR generate: {exc}")
             return 1
         from brandkit.qa import report as vreport
         from brandkit.qa import visual as vqa
 
-        visual_dir = vqa.default_out_dir(args.output)
+        visual_dir = vqa.default_out_dir(final_output)
         # B2: discover prior SAME-SHELL reports BEFORE writing this run's report,
         # so the cross-run regression findings can be computed and folded in. This
         # discovery (sha derivation included) is a pure SIDE artifact: it degrades
@@ -411,19 +437,24 @@ def main(argv: list[str] | None = None) -> int:
             )
         except Exception:
             prior_reports = []
-        report = run_qa(
-            out,
-            loaded.profile,
-            qa=args.qa,
-            shell=loaded.shell_path,
-            extra_findings=gen_findings,
-            out_dir=visual_dir,
-            # Generate-time only: records the artifact's content sha into the visual
-            # manifest (so the L2 model can scope a verdict to it) and gates the L2
-            # short-circuit. ``cli.verify`` passes no content_hash => stays None =>
-            # the short-circuit never fires there (verify behaviour unchanged).
-            content_hash=content_hash,
-        )
+        try:
+            report = run_qa(
+                out,
+                loaded.profile,
+                qa=args.qa,
+                shell=loaded.shell_path,
+                extra_findings=gen_findings,
+                out_dir=visual_dir,
+                # Generate-time only: records the artifact's content sha into the visual
+                # manifest (so the L2 model can scope a verdict to it) and gates the L2
+                # short-circuit. ``cli.verify`` passes no content_hash => stays None =>
+                # the short-circuit never fires there (verify behaviour unchanged).
+                content_hash=content_hash,
+            )
+        except Exception as exc:
+            temp_output.unlink(missing_ok=True)
+            print(f"ERROR generate QA: {exc}")
+            return 1
         # B2: fold cross-run regression findings into THIS run's report so they
         # self-record into the persisted generation_report.json (making recurrence
         # visible to the next run). They are advisory INFO/WARNING -- never ERROR,
@@ -440,11 +471,22 @@ def main(argv: list[str] | None = None) -> int:
             report.findings.extend(regression_findings)
             if report.verdict != schema.VerificationStatus.FAILED.value:
                 report.verdict = schema.VerificationStatus.PASSED_WITH_WARNINGS.value
+        # Publish only a QA-passing artifact. os.replace is same-filesystem and
+        # atomic, so a failed run cannot clobber an existing good deliverable.
+        report_document = out
+        if report.passed:
+            try:
+                os.replace(out, final_output)
+            except OSError as exc:
+                temp_output.unlink(missing_ok=True)
+                print(f"ERROR generate publish: {exc}")
+                return 1
+            report_document = final_output
         # Persist the run as a durable side artifact (degrade-to-no-op on any
         # error; the timestamp lives only in this JSON, never in the doc bytes).
         report_path = vreport.build_generation_report(
             profile=loaded.profile,
-            document=out,
+            document=report_document,
             report=report,
             shell_path=loaded.shell_path,
             out_dir=visual_dir,
@@ -459,8 +501,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"visual manifest: {manifest_findings[0].location}")
         if report_path is not None:
             print(f"generation report: {report_path}")
-        print(f"generated {out}")
-        return 0 if report.passed else 1
+        if not report.passed:
+            temp_output.unlink(missing_ok=True)
+            print("generation rejected by QA; output was not published")
+            return 1
+        print(f"generated {final_output}")
+        return 0
     if args.cmd == "comprehend-input":
         loaded = store.load_profile(args.name, args.scope)
         # B4: surface the SAME-shell generation_report.json history (the AMBIGUOUS

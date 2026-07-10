@@ -1,4 +1,5 @@
 # brand-docs runtime dependencies (the contract; doctor.py checks these at runtime).
+# Maintainers/CI use requirements-ci.txt, which pins this stack plus test tools.
 # External binaries (soffice/libreoffice, pdftoppm) are NOT pip-installable and are
 # probed by doctor.py - their absence degrades visual QA (L1/L2) but never blocks L0.
 # Optional fallback: install PyMuPDF separately (`python -m pip install PyMuPDF`)

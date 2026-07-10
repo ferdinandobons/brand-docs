@@ -392,6 +392,7 @@ DEFAULT_L0_INVARIANTS: tuple[str, ...] = (
     # Both no-op when there is no output to diff (verify time), so the model-free
     # CI path is unaffected.
     "formula_preservation",
+    "extension_survival",
     "component_survival",
 )
 

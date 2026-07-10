@@ -69,7 +69,7 @@ captured at extract time and resolved through `profile/resolver.py`.
 ## QA in one paragraph
 
 `qa/gate.py` orchestrates three levels: L0 deterministic checks (membership,
-floors, idempotency, formula preservation; ids frozen in `qa/model.py`'s
+floors, idempotency, formula and XLSX worksheet-extension preservation; ids frozen in `qa/model.py`'s
 `CHECK_REGISTRY`), L1 rendering via LibreOffice + Poppler into page PNGs, and
 L2, a `visual_manifest.json` the orchestrating agent judges. Checks are honest:
 a check only claims what it can prove (name membership where names exist,

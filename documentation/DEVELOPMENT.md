@@ -2,7 +2,7 @@
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt pytest ruff
+pip install -r requirements-ci.txt
 PYTHONPATH=scripts pytest -q        # docx / pptx / xlsx / security / integration / smoke suites
 ```
 

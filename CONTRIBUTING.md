@@ -11,7 +11,7 @@ to keep that promise true while many hands touch the code.
 git clone https://github.com/ferdinandobons/brand-docs.git
 cd brand-docs
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt pytest ruff
+pip install -r requirements-ci.txt
 ```
 
 Optional but recommended, the visual QA renderers (LibreOffice + Poppler,
@@ -30,7 +30,7 @@ Without them the engine still works; visual QA degrades to deterministic-only
 The suite has three lanes. The first is the one every PR must keep green:
 
 ```bash
-# 1) Full model-free suite (what CI runs on 3.10 / 3.11 / 3.12)
+# 1) Full model-free suite (what CI runs on 3.10 / 3.11 / 3.12 / 3.13)
 PYTHONPATH=scripts python -m pytest -q
 
 # 2) Real-render lane (needs LibreOffice + Poppler; CI runs it in its own job)

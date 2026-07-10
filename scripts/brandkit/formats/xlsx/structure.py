@@ -35,7 +35,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-from openpyxl.utils.cell import range_boundaries
+from openpyxl.utils.cell import get_column_letter, range_boundaries
 
 from brandkit.common.text import slugify
 
@@ -70,16 +70,38 @@ def anchor_id_for_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 # Named-region geometry (the deterministic evidence; no literals)
 # ---------------------------------------------------------------------------
-def _first_destination(defined_name) -> Optional[tuple[str, str]]:
-    """Return the first ``(sheet, coord)`` destination of a defined name, or None."""
+class NamedRegionError(ValueError):
+    """Raised when a defined name cannot map safely to one writable rectangle."""
+
+
+def _destinations(defined_name) -> list[tuple[str, str]]:
+    """Return every cell destination of a defined name (empty when non-spatial)."""
     try:
         destinations = list(defined_name.destinations)
     except Exception:
-        return None
-    if not destinations:
-        return None
-    sheet, coord = destinations[0]
-    return sheet, coord
+        return []
+    return [(str(sheet), str(coord)) for sheet, coord in destinations]
+
+
+def _normalize_coord(wb, sheet: str, coord: str) -> str:
+    """Convert whole-row/whole-column references to the sheet's used rectangle."""
+    if sheet not in wb.sheetnames:
+        raise NamedRegionError(f"defined name targets missing worksheet {sheet!r}")
+    try:
+        min_col, min_row, max_col, max_row = range_boundaries(coord)
+    except Exception as exc:
+        raise NamedRegionError(f"unsupported defined-name range {coord!r}") from exc
+    if None not in (min_col, min_row, max_col, max_row):
+        return coord
+    ws = wb[sheet]
+    min_col = min_col or 1
+    max_col = max_col or max(ws.max_column, 1)
+    min_row = min_row or 1
+    max_row = max_row or max(ws.max_row, 1)
+    return (
+        f"${get_column_letter(min_col)}${min_row}:"
+        f"${get_column_letter(max_col)}${max_row}"
+    )
 
 
 def _merged_ranges(ws) -> list:
@@ -210,11 +232,16 @@ def _iter_named_regions(wb) -> list[tuple[str, str, str]]:
         # Older openpyxl exposes defined_names as a list-like of DefinedName.
         items = [(dn.name, dn) for dn in wb.defined_names]
     for name, defined_name in items:
-        dest = _first_destination(defined_name)
-        if dest is None:
+        destinations = _destinations(defined_name)
+        if not destinations:
             continue
-        sheet, coord = dest
-        out.append((str(name), sheet, coord))
+        if len(destinations) != 1:
+            raise NamedRegionError(
+                f"defined name {name!r} has {len(destinations)} discontiguous "
+                "destinations; one rectangular destination is required"
+            )
+        sheet, coord = destinations[0]
+        out.append((str(name), sheet, _normalize_coord(wb, sheet, coord)))
     out.sort(key=lambda t: t[0])
     return out
 

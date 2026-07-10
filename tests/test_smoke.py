@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -218,6 +219,70 @@ class M1SmokeTest(unittest.TestCase):
                 self.assertIn("Figure 1. Branded caption.", text)
                 self.assertNotIn("Example first-level title", text)
                 self.assertNotIn("General instructions", text)
+            finally:
+                os.chdir(old_cwd)
+
+    def test_generate_preflight_preserves_existing_output_on_shell_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_cwd = Path.cwd()
+            os.chdir(root)
+            try:
+                template = root / "template.docx"
+                _synthetic_template(template)
+                self.assertEqual(
+                    main(
+                        [
+                            "extract",
+                            "--name",
+                            "atomic",
+                            "--template",
+                            str(template),
+                            "--scope",
+                            "project",
+                        ]
+                    ),
+                    0,
+                )
+                shell = root / "brand-kit" / "atomic" / "template" / "shell.docx"
+                with zipfile.ZipFile(shell, "a") as zf:
+                    zf.comment = b"valid package, drifted provenance"
+
+                idoc = root / "idoc.json"
+                idoc.write_text(
+                    json.dumps(
+                        {
+                            "cover": {"title": "Must not publish"},
+                            "blocks": [{"type": "paragraph", "text": "body"}],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                out = root / "deliverable.docx"
+                original = b"previous-good-output"
+                out.write_bytes(original)
+                stdout = StringIO()
+                with redirect_stdout(stdout):
+                    rc = main(
+                        [
+                            "generate",
+                            "--name",
+                            "atomic",
+                            "--input",
+                            str(idoc),
+                            "--output",
+                            str(out),
+                            "--scope",
+                            "project",
+                            "--qa",
+                            "fast",
+                        ]
+                    )
+                self.assertEqual(rc, 1)
+                self.assertEqual(out.read_bytes(), original)
+                self.assertIn("preflight failed", stdout.getvalue())
+                self.assertNotIn("generated ", stdout.getvalue())
+                self.assertEqual(list(root.glob(".deliverable.*.docx")), [])
             finally:
                 os.chdir(old_cwd)
 

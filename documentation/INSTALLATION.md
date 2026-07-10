@@ -17,7 +17,7 @@ skills to your agent.
 
 ### Required: core extract / generate / deterministic QA
 
-- **Python ≥ 3.10**: Python packages (from [`requirements.txt`](../requirements.txt)):
+- **Python 3.10-3.13**: Python packages (from [`requirements.txt`](../requirements.txt)):
   `python-docx>=1.1`, `python-pptx>=1.0`, `openpyxl>=3.1`, `lxml>=5.0`, `Pillow>=10.0`
 
 ```bash

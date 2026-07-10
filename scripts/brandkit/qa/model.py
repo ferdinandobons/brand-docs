@@ -25,6 +25,7 @@ CHECK_REGISTRY: frozenset[str] = frozenset(
         "component_survival",
         "comprehension_targets_exist",
         "every_role_resolves",
+        "extension_survival",
         "formula_preservation",
         "index_matches_content",
         "no_literal_markdown",

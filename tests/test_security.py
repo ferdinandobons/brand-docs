@@ -26,7 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+from openpyxl import Workbook
+
 from brandkit.common import color
+from brandkit.formats.xlsx import extract as xlsx_extract
 from brandkit.ooxml import pack
 from brandkit.profile import schema
 from brandkit.profile import store
@@ -151,6 +154,21 @@ class ProvenanceDriftTest(unittest.TestCase):
                 )
             )
 
+    def test_invalid_output_is_failed_report_not_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "invalid.docx"
+            output.write_bytes(b"not-an-ooxml-package")
+            profile = schema.build_envelope("docx", {"name": "invalid"})
+            report = run_qa(output, profile, qa="fast")
+            self.assertFalse(report.passed)
+            self.assertTrue(
+                any(
+                    finding.check == "package_integrity"
+                    and finding.severity == schema.Severity.ERROR.value
+                    for finding in report.findings
+                )
+            )
+
 
 # ---------------------------------------------------------------------------
 # M11 - zip-slip
@@ -204,6 +222,32 @@ class DecompressionBombTest(unittest.TestCase):
             pack.read_part(src, "word/huge.xml")
         # A small sibling part in the same package still reads fine.
         self.assertEqual(pack.read_part(src, "ok.xml"), b"fine")
+
+    def test_live_xlsx_extractor_rejects_bomb_before_openpyxl(self) -> None:
+        src = self._bomb(
+            {
+                "[Content_Types].xml": b"<Types/>",
+                "xl/workbook.xml": b"0" * 2048,
+            }
+        )
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(pack.PackError):
+                xlsx_extract.extract(src, "hostile", scope="project", cwd=td)
+            self.assertFalse((Path(td) / "brand-kit" / "hostile").exists())
+
+    def test_live_xlsx_extractor_accepts_legitimate_package(self) -> None:
+        pack.MAX_PART_UNCOMPRESSED = self._part
+        pack.MAX_PACKAGE_UNCOMPRESSED = self._pkg
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = root / "legitimate.xlsx"
+            wb = Workbook()
+            wb.active["A1"] = "safe"
+            wb.save(src)
+            profile_path = xlsx_extract.extract(
+                src, "legitimate", scope="project", cwd=root
+            )
+            self.assertTrue(profile_path.is_file())
 
 
 class ZipSlipTest(unittest.TestCase):

@@ -71,6 +71,7 @@ from brandkit.formats.pptx import structure
 from brandkit.ir import components
 from brandkit.ir import model as ir
 from brandkit.ooxml import chart as chartlib
+from brandkit.ooxml import pack
 from brandkit.ooxml.idempotency import repack_fixed_timestamps
 from brandkit.profile import schema, store
 from brandkit.profile.reconcile import confidence_clears_floor
@@ -140,6 +141,7 @@ def generate(
     regenerates the agenda from the new headings).
     """
     sink: list[Finding] = findings if findings is not None else []
+    pack.validate_package(shell_path)
     # Expand reusable-fragment refs to primitives BEFORE resolution, mirroring the
     # docx leg (docx/generate.py): a component/section block names a profile
     # ``components``/``sections`` registry entry and is replaced in place by that

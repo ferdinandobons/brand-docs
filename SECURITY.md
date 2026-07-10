@@ -7,8 +7,8 @@ BrandDocs is in **alpha** (`0.x`). Security fixes are applied to the latest
 
 | Version | Supported |
 |---------|-----------|
-| `0.1.x` | ✅        |
-| `< 0.1` | ❌        |
+| Latest `0.x` release | ✅        |
+| Older `0.x` releases | ❌        |
 
 ## Reporting a vulnerability
 
@@ -40,4 +40,8 @@ BrandDocs parses untrusted Office (OOXML) files. Areas of particular interest:
 
 The engine is self-contained (`python-docx` / `python-pptx` / `openpyxl` +
 `lxml`) with no cloud calls, which limits exposure, but template input is still
-untrusted and handled accordingly.
+untrusted and handled accordingly. Every live extract/generate/QA/render entrypoint
+validates the OOXML ZIP metadata before handing bytes to a third-party parser:
+compressed and inflated size ceilings, entry-count and per-part limits, duplicate
+parts, unsafe paths, compression ratio, and the required content-types part are
+checked centrally.

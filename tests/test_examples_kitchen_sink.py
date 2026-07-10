@@ -33,9 +33,11 @@ from brandkit.formats.pptx import extract as pptx_extract
 from brandkit.formats.pptx import generate as pptx_generate
 from brandkit.formats.xlsx import extract as xlsx_extract
 from brandkit.formats.xlsx import generate as xlsx_generate
+from brandkit.formats.xlsx import package as xlsx_package
 from brandkit.grid.model import GridDocument
 from brandkit.ir.model import parse_idoc
 from brandkit.profile import store
+from brandkit.qa import checks_deterministic
 from brandkit.qa.gate import run_qa
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "examples" / "templates"
@@ -512,6 +514,37 @@ class XlsxKitchenSink(_Base):
                 hashlib.sha256(a.read_bytes()).hexdigest(),
                 hashlib.sha256(b.read_bytes()).hexdigest(),
             )
+
+    def test_shell_sparklines_survive_openpyxl_generation(self):
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            out = td / "out.xlsx"
+            xlsx_generate.generate(
+                loaded.profile, loaded.shell_path, GridDocument(), out
+            )
+            before = xlsx_package.worksheet_extension_counts(loaded.shell_path)
+            after = xlsx_package.worksheet_extension_counts(out)
+            uri = xlsx_package.SPARKLINE_EXTENSION_URI
+            self.assertEqual(before["Dashboard"][uri], 1)
+            self.assertEqual(after["Dashboard"][uri], 1)
+            report = run_qa(out, loaded.profile, shell=loaded.shell_path, qa="fast")
+            self.assertFalse(
+                [f for f in report.findings if f.check == "extension_survival"]
+            )
+
+    def test_qa_fails_when_sparklines_are_removed(self):
+        with tempfile.TemporaryDirectory() as t:
+            td = Path(t)
+            loaded = self._extract(td)
+            lossy = td / "lossy.xlsx"
+            wb = xlsx_package.load_workbook_checked(loaded.shell_path, data_only=False)
+            wb.save(lossy)  # deliberately bypass the raw-OOXML restore layer
+            findings = checks_deterministic.check_xlsx_extension_survival(
+                loaded.shell_path, lossy, loaded.profile
+            )
+            self.assertTrue(findings)
+            self.assertTrue(all(f.severity == "ERROR" for f in findings))
 
     def test_kitchen_sink_authors_native_chart(self):
         # Exercise the NATIVE xlsx chart writer against the example template: chart

@@ -82,14 +82,26 @@ def run_qa(
     # object or fact is ever cached across run_qa invocations (shell-frozen
     # sha semantics still read file bytes straight from disk).
     with checks_deterministic.load_memo():
-        if target is not None and profile.get("kind") == "docx":
-            findings = checks_deterministic.check_docx(target, profile, shell=shell)
-        elif target is not None and profile.get("kind") == "pptx":
-            findings = checks_deterministic.check_pptx(target, profile, shell=shell)
-        elif target is not None and profile.get("kind") == "xlsx":
-            findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
-        else:
-            findings = checks_deterministic.check_profile(profile)
+        try:
+            if target is not None and profile.get("kind") == "docx":
+                findings = checks_deterministic.check_docx(target, profile, shell=shell)
+            elif target is not None and profile.get("kind") == "pptx":
+                findings = checks_deterministic.check_pptx(target, profile, shell=shell)
+            elif target is not None and profile.get("kind") == "xlsx":
+                findings = checks_deterministic.check_xlsx(target, profile, shell=shell)
+            else:
+                findings = checks_deterministic.check_profile(profile)
+        except Exception as exc:
+            # A malformed/unsafe package is a failed proof, not a traceback. Keep
+            # schema findings visible and add one load-bearing integrity error.
+            findings = checks_deterministic.check_profile(profile) + [
+                Finding(
+                    "package_integrity",
+                    schema.Severity.ERROR.value,
+                    f"could not inspect generated package safely: {exc}",
+                    location=str(target) if target is not None else None,
+                )
+            ]
 
         # Format-agnostic OPC integrity backstop: a generated package with duplicate
         # ZIP part names is corrupt (Office repair dialog). No-ops at verify time / on a

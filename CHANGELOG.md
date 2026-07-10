@@ -2,6 +2,38 @@
 
 All notable changes to BrandDocs are documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- The live extract, generate, deterministic-QA and visual-render boundaries now
+  validate OOXML packages before third-party parsers see them. Archive size,
+  inflated part/package size, entry count, compression ratio, duplicate members,
+  unsafe paths and the required content-types part are enforced centrally, so the
+  existing decompression-bomb defense is no longer limited to an unused unpacker.
+
+### Fixed
+
+- XLSX generation now restores the template's x14 sparkline groups after the
+  openpyxl save, and the new fail-closed `extension_survival` L0 check detects any
+  worksheet extension family/count lost between shell and output.
+- `generate` validates schema/resolvers/provenance before authoring and writes to a
+  same-directory temporary file, publishing with an atomic replace only after QA
+  passes. Failed runs no longer overwrite an existing good output or print it as
+  generated.
+- Whole-row/whole-column Excel names are bounded to the worksheet's used rectangle;
+  discontiguous names fail with a clear error instead of being silently truncated;
+  XLSX text scans and demo clearing visit materialized cells only.
+- Fixture-builder import/build errors now fail CI instead of becoming skips, and
+  the example DOCX builder uses character-style names instead of deprecated
+  style-id lookup.
+
+### Changed
+
+- CI/dev dependencies are pinned in `requirements-ci.txt`, warnings are errors
+  except for the explicitly accounted-for openpyxl sparkline warning, and the
+  tested/supported Python range is now explicit at 3.10-3.13.
+
 ## [0.10.0] - 2026-06-10
 
 Hero-image polish release.

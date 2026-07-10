@@ -270,7 +270,7 @@ def _build_cover(wb: Workbook) -> None:
     ws.row_dimensions[8].height = 28
     # Header drawing: the shared BrandDocs wordmark sits inside the printable
     # area at a 4:1 aspect ratio so the text is not distorted.
-    logo = XLImage(_logo_path())
+    logo = XLImage(io.BytesIO(_logo_path().read_bytes()))
     logo.width, logo.height = 180, 45
     ws.add_image(logo, "A9")
     # A small color-code LEGEND describing the model conventions (real financial
@@ -589,7 +589,7 @@ def _build_summary(wb: Workbook) -> None:
     # Repeat a small BrandDocs wordmark on the summary so the printed deliverable
     # carries the brand identity beyond the cover (reuses the cached deterministic
     # wordmark PNG; no fresh raster).
-    mark = XLImage(_logo_path())
+    mark = XLImage(io.BytesIO(_logo_path().read_bytes()))
     mark.width, mark.height = 120, 30
     ws.add_image(mark, "D1")
 

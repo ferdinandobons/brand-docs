@@ -106,8 +106,8 @@ which were degraded, and what to repair next.
 
 | Layer | What it proves | What happens on failure |
 |---|---|---|
-| **Preflight** | `doctor` checks required Python packages, optional renderers (`soffice`, `pdftoppm`, PyMuPDF/`fitz`), and optional OCR (`tesseract`) before work starts. | Missing required packages must be installed/repaired. Missing visual/OCR tools downgrade only that proof layer. |
-| **L0 deterministic QA** | Schema validity, resolver targets, allowed styles/layouts/ranges, residual demo text, markdown leaks, structural diffs, formula preservation. | The gate fails or emits explicit findings before the output is treated as clean. |
+| **Preflight** | `doctor` checks dependencies; the shared OOXML boundary checks archive/part sizes, entry count, duplicate/unsafe paths and compression ratio before any Office parser or renderer opens a file. Generate also validates profile, resolver and shell provenance before authoring. | Missing dependencies must be repaired; unsafe packages and invalid/drifted profiles fail before an output is created. Missing visual/OCR tools downgrade only that proof layer. |
+| **L0 deterministic QA** | Schema validity, resolver targets, allowed styles/layouts/ranges, residual demo text, markdown leaks, structural diffs, formula preservation, and XLSX worksheet-extension survival. | The gate fails before the temporary output is atomically published; a failed run cannot replace a previous good deliverable. |
 | **L1 visual proxies** | Rendered-page signals such as blank pages, zero pages, content near page/slide edges, and optional OCR hits for visible residual template text. | Findings are warnings because the engine can detect symptoms, not intent. |
 | **L2 visual judgement** | The orchestrator opens the PNGs from `visual_manifest.json`, judges checklist items, and decides whether the result is visually acceptable. `strict` turns unclean visual evidence into gate errors. | Apply a targeted repair, regenerate, and rerun `--qa deep` or `--qa strict` until clean or honestly blocked. |
 

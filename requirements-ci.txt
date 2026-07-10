@@ -1,0 +1,12 @@
+# Reproducible CI/development toolchain. Runtime users install requirements.txt;
+# maintainers use this file so dependency and gate upgrades are intentional.
+-r requirements.txt
+
+python-docx==1.2.0
+python-pptx==1.0.2
+openpyxl==3.1.5
+lxml==6.1.1
+Pillow==12.2.0
+pytest==9.0.3
+ruff==0.15.2
+mypy==2.2.0

@@ -51,6 +51,7 @@ from typing import Union
 from PIL import Image
 
 from brandkit import doctor
+from brandkit.ooxml import pack
 from brandkit.profile import schema
 from brandkit.qa import checks_deterministic
 from brandkit.qa.model import Finding
@@ -166,6 +167,7 @@ def render_to_pngs(
         return []
 
     try:
+        pack.validate_package(document)
         out_dir.mkdir(parents=True, exist_ok=True)
         # Idempotent per call: clear stale frames from an earlier repair iteration.
         for stale in out_dir.glob("page-*.png"):
@@ -244,6 +246,9 @@ def render_to_pngs(
                     render_warnings=render_warnings,
                     reason="after PDF rasterization failure",
                 )
+    except pack.PackError as exc:
+        _append_render_error(render_errors, f"unsafe OOXML package refused: {exc}")
+        return []
     except subprocess.TimeoutExpired as exc:
         _append_render_error(render_errors, f"render timed out: {exc}")
         return []

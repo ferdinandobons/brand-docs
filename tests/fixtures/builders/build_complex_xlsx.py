@@ -39,6 +39,7 @@ Run:
 
 from __future__ import annotations
 
+import io
 import struct
 import zlib
 from pathlib import Path
@@ -155,7 +156,7 @@ def _build_cover(wb: Workbook) -> None:
     ws["B6"] = "2026-01-15"
     ws["B6"].number_format = "yyyy-mm-dd"
     # Header drawing: the synthetic logo lives in the sheet header band.
-    logo = XLImage(_logo_path())
+    logo = XLImage(io.BytesIO(_logo_path().read_bytes()))
     logo.width, logo.height = 96, 36
     ws.add_image(logo, "G1")
     ws.column_dimensions["A"].width = 18

@@ -17,11 +17,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from openpyxl import load_workbook
-
 from brandkit.common import color, profilemd
 from brandkit.common import typography as common_typography
 from brandkit.formats import catalog
+from brandkit.formats.xlsx import package as xlsx_package
 from brandkit.formats.xlsx import structure as xlsx_structure
 from brandkit.formats.xlsx import typography
 from brandkit.ooxml import pack
@@ -36,7 +35,7 @@ def extract(
     cwd: str | Path | None = None,
 ) -> Path:
     template_path = Path(template)
-    wb = load_workbook(template_path, data_only=False)
+    wb = xlsx_package.load_workbook_checked(template_path, data_only=False)
 
     named_regions = xlsx_structure.named_regions_map(wb)
     # Format-uniform inventories the model reasons over and the validator binds to
